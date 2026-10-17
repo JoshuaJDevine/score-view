@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Score View</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="group seg" id="modeSeg">
+    <button data-mode="clip" class="on" title="Just the selected clip">Clip</button>
+    <button data-mode="score" title="Selected tracks from the DAWproject export, with the selected clip live">Score</button>
+  </div>
+  <div class="group">
+    <div class="seg" id="srcSeg">
+      <button data-src="arranger" class="on">Arranger</button>
+      <button data-src="launcher">Launcher</button>
+    </div>
+  </div>
+  <div class="group scoreOnly hidden">
+    <button class="btn" id="freshBtn" title="Start an empty score from this project's instrument tracks (drops the previous score)">New empty score</button>
+    <button class="btn" id="openBtn" title="Pick your DAWproject export; it reloads automatically when you re-export">Open .dawproject…</button>
+    <button class="btn hidden" id="reconnectBtn"></button>
+    <input type="file" id="fileInput" accept=".dawproject,.xml" class="hidden">
+    <div class="dropdown">
+      <button class="btn" id="trackBtn">Tracks ▾</button>
+      <button class="btn" id="pinBtn" title="Keep this track in the score (P)">Pin</button>
+      <div id="trackPanel" class="hidden">
+        <label><input type="radio" name="trackMode" value="pinned"> Pinned tracks + selected clip's track</label>
+        <label><input type="radio" name="trackMode" value="all"> All tracks</label>
+        <div class="hint">Tick tracks to pin them, click a group name to pin the whole group, or press <b>P</b> to pin the selected clip's track. <a id="clearPins">Clear pins</a></div>
+        <div id="trackList"></div>
+      </div>
+    </div>
+    <div class="seg" id="rangeSeg">
+      <button data-range="clip" title="Only the bars under the selected clip">Clip bars</button>
+      <button data-range="all">Whole song</button>
+    </div>
+  </div>
+  <div class="group">
+    <label for="keySel">Key</label>
+    <select id="keySel">
+      <option value="auto">Auto</option>
+      <option value="-6">G♭ / e♭m</option><option value="-5">D♭ / b♭m</option><option value="-4">A♭ / fm</option>
+      <option value="-3">E♭ / cm</option><option value="-2">B♭ / gm</option><option value="-1">F / dm</option>
+      <option value="0">C / am</option><option value="1">G / em</option><option value="2">D / bm</option>
+      <option value="3">A / f♯m</option><option value="4">E / c♯m</option><option value="5">B / g♯m</option>
+      <option value="6">F♯ / d♯m</option>
+    </select>
+    <label for="gridSel">Quantize</label>
+    <select id="gridSel">
+      <option value="4">8th</option><option value="2" selected>16th</option><option value="1">32nd</option>
+    </select>
+  </div>
+  <div class="group">
+    <div class="seg" id="layoutSeg">
+      <button data-layout="page" class="on">Page</button>
+      <button data-layout="line">Single line</button>
+    </div>
+    <label for="zoom">Zoom</label>
+    <input type="range" id="zoom" min="20" max="80" value="55">
+  </div>
+  <div class="group">
+    <label title="Show short detached notes with longer values (display only)"><input type="checkbox" id="simplify" checked> Simplify rhythms</label>
+    <label><input type="checkbox" id="follow" checked> Follow</label>
+    <label><input type="checkbox" id="condense" checked> Hide empty staves</label>
+    <label title="Hide notes below C1 (articulation keyswitches)"><input type="checkbox" id="hideKs" checked> Hide keyswitches</label>
+    <label><input type="checkbox" id="audition" checked> Audition</label>
+  </div>
+  <div id="status"><span id="renderTime"></span><span id="title">—</span><span id="dot" title="Bitwig connection"></span></div>
+</header>
+<div id="featureBar" class="hidden"></div>
+<main id="main" tabindex="0">
+  <div id="paper"><div id="empty">Loading notation engine…</div></div>
+</main>
+<div id="svStatusBar">
+  <span id="svSelInfo">Nothing selected</span>
+  <span id="svEntryInfo" hidden></span>
+  <span class="svs-spacer"></span>
+  <span id="svStatusTools"></span>
+  <span id="svStatusRight"></span>
+</div>
+<footer id="help"><button id="helpToggle" title="Show all keyboard shortcuts">Shortcuts ▾</button>
+  Click a note (<kbd>Shift</kbd>+click to add) · <kbd>↑</kbd><kbd>↓</kbd> semitone · <kbd>Alt</kbd>+<kbd>↑</kbd><kbd>↓</kbd> scale step ·
+  <kbd>Shift</kbd>+<kbd>↑</kbd><kbd>↓</kbd> octave · <kbd>←</kbd><kbd>→</kbd> move · <kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd> length ·
+  <kbd>Del</kbd> delete · <kbd>Tab</kbd> next note · <kbd>Ctrl</kbd>+<kbd>Z</kbd>/<kbd>Y</kbd> undo/redo in Bitwig
+</footer>
+<div id="drop">Drop a .dawproject file</div>
+<div id="flash" class="hidden"></div>
+<!-- Page core: web/core/*.js, classic scripts in this order (see core/base.js). guard.js comes first: it adds the
+     X-ScoreView header to every /api request. The feature modules follow; their order is the hook order. -->
+<script src="core/guard.js"></script>
+<script src="vendor/verovio-toolkit-wasm.js"></script>
+<script src="vendor/fflate.js"></script>
+<script src="score.js"></script>
+<script src="dawproject.js"></script>
+<script src="align.js"></script>
+<script src="core/base.js"></script>
+<script src="core/shortcuts.js"></script>
+<script src="core/sources.js"></script>
+<script src="core/render.js"></script>
+<script src="core/net.js"></script>
+<script src="core/project.js"></script>
+<script src="core/tracks.js"></script>
+<script src="core/selection.js"></script>
+<script src="core/keyboard.js"></script>
+<script src="core/hit.js"></script>
+<script src="core/ui.js"></script>
+<script src="core/api.js"></script>
+<script src="core/start.js"></script>
+<script src="features/instruments.js"></script>
+<script src="features/articulations.js"></script>
+<script src="features/sections.js"></script>
+<script src="features/rhythm.js"></script>
+<script src="features/library-profiles.js"></script>
+<script src="features/dynamics.js"></script>
+<script src="features/harmony.js"></script>
+<script src="features/motifs.js"></script>
+<script src="features/orchestrate.js"></script>
+<script src="features/inspire-library.js"></script>
+<script src="features/inspire.js"></script>
+<script src="features/entry.js"></script>
+<script src="features/controller.js"></script>
+<script src="features/mouse.js"></script>
+<script src="features/passage.js"></script>
+<script src="features/playback.js"></script>
+<script src="features/musicxml.js"></script>
+<script src="features/arrangement.js"></script>
+<script src="features/import.js"></script>
+<script src="features/print.js"></script>
+<script src="features/theme.js"></script>
+<script src="features/notation.js"></script>
+<script src="features/wizard-plugins.js"></script>
+<script src="features/wizard-presets.js"></script>
+<script src="features/wizard-templates.js"></script>
+<script src="features/wizard.js"></script>
+<script src="features/toasts.js"></script>
+<script src="features/statusbar.js"></script>
+<script src="features/palette.js"></script>
+<script src="features/layout.js"></script>
+</body>
+</html>

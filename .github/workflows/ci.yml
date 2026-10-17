@@ -1,0 +1,61 @@
+# Compile checks and the whole test suite (unit + e2e against the mock server in headless Chrome) on every push and PR.
+# windows-latest matches the user's machine and has Google Chrome preinstalled (test/lib.mjs finds it).
+# Nothing here talks to Bitwig: the e2e suites drive test/mock-server.mjs on ports 8900+.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - run: npm ci
+
+      # build/ is gitignored, but playback-e2e saves its screenshots there.
+      - run: mkdir -p build
+
+      - name: Compile check (Java)
+        run: npm run check:java
+
+      - name: Syntax check (JS)
+        run: npm run check:js
+
+      # run-all.sh is called directly (not through npm) so it runs in Git Bash, never WSL's bash.exe.
+      - name: Unit suites
+        run: bash test/run-all.sh -j 2 unit
+
+      - name: End-to-end suites
+        run: bash test/run-all.sh -j 2 e2e
+
+      - name: Upload screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output
+          path: |
+            test/out*.png
+            test/out*.pdf
+            build/out-*.png
+          if-no-files-found: ignore

@@ -1,0 +1,227 @@
+/* Score View core styles. Feature modules add their own CSS at run time (SV.addStyle), after this file.
+
+   Design tokens: --sv-* on :root (dark chrome, the default). html[data-chrome="light"] swaps the chrome to light;
+   html[data-density="compact"] shrinks controls (features/theme.js sets both from saved preferences).
+   The paper colours (--sv-paper, --sv-sel, --sv-play) are re-tuned per paper theme in features/theme.js.
+   Orange (--sv-accent) is reserved for the primary action and the selection; warnings use --sv-warn.
+   The old names (--bar, --bar2, --line, --text, --dim, --accent, --desk, --paper, --sel, --play) stay as aliases so
+   feature CSS that uses them follows the tokens. */
+:root {
+  /* chrome colours: Bitwig graphite */
+  --sv-bg: #383838;            /* desk behind the paper */
+  --sv-surface-1: #222222;     /* header, footer */
+  --sv-surface-2: #2a2a2a;     /* feature bar, panels */
+  --sv-surface-3: #303030;     /* controls */
+  --sv-surface-hover: #3a3a3a;
+  --sv-surface-raised: #444444; /* the chosen segment of a segmented control */
+  --sv-border: #3e3e3e;
+  --sv-divider: #111111;       /* bar edges */
+  --sv-text: #d6d6d6;
+  --sv-text-strong: #ffffff;
+  --sv-text-dim: #8c8c8c;
+  --sv-text-faint: #5c5c5c;
+  --sv-accent: #ff7a1a;        /* primary action + selection only */
+  --sv-accent-hover: #ff8f3d;
+  --sv-on-accent: #111111;
+  --sv-ok: #40c057;
+  --sv-warn: #fab005;          /* warnings: never the accent */
+  --sv-err: #fa5252;
+  --sv-info: #4dabf7;
+  --sv-focus: 0 0 0 2px #ff7a1a88;
+  --sv-shadow-paper: 0 2px 12px #0006;
+  --sv-shadow-pop: 0 6px 20px #000a;
+  --sv-shadow-dlg: 0 16px 48px #000c;
+  --sv-toast-bg: #111111dd;
+  --sv-toast-text: #ffffff;
+  --sv-drop-bg: #ff7a1a33;
+  --sv-empty-text: #555555;
+
+  /* paper (features/theme.js re-tunes these for dark paper) */
+  --sv-paper: #fbfaf6;
+  --sv-sel: #e8590c;
+  --sv-play: #1c7ed6;
+
+  /* sizes */
+  --sv-control-h: 28px;
+  --sv-control-pad-x: 10px;
+  --sv-radius-sm: 4px;         /* controls */
+  --sv-radius-md: 6px;         /* popovers, panels */
+  --sv-radius-lg: 10px;        /* dialogs, palette */
+  --sv-space-1: 2px;
+  --sv-space-2: 4px;
+  --sv-space-3: 6px;
+  --sv-space-4: 8px;
+  --sv-space-5: 12px;
+  --sv-space-6: 16px;
+  --sv-space-7: 24px;
+
+  /* type */
+  --sv-font: system-ui, "Segoe UI Variable", "Segoe UI", sans-serif;
+  --sv-font-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --sv-fs-label: 10px;         /* caps section labels */
+  --sv-fs-small: 11px;
+  --sv-fs-control: 12px;
+  --sv-fs-body: 13px;
+  --sv-fs-title: 15px;
+  --sv-fs-dialog: 18px;
+
+  /* layers */
+  --sv-z-overlay: 5;           /* layers on the paper */
+  --sv-z-menu: 20;             /* dropdown menus */
+  --sv-z-pop: 40;              /* popovers */
+  --sv-z-panel: 55;            /* floating panels */
+  --sv-z-dialog: 60;           /* modal dialogs, drop target */
+  --sv-z-palette: 80;
+  --sv-z-toast: 90;
+
+  --sv-motion: 120ms ease-out;
+
+  /* old names (feature modules use these) */
+  --bar: var(--sv-surface-1);
+  --bar2: var(--sv-surface-2);
+  --line: var(--sv-border);
+  --text: var(--sv-text);
+  --dim: var(--sv-text-dim);
+  --accent: var(--sv-accent);
+  --desk: var(--sv-bg);
+  --paper: var(--sv-paper);
+  --sel: var(--sv-sel);
+  --play: var(--sv-play);
+}
+
+html[data-chrome="light"] {
+  --sv-bg: #e2dfd8;
+  --sv-surface-1: #f7f6f3;
+  --sv-surface-2: #efede8;
+  --sv-surface-3: #ffffff;
+  --sv-surface-hover: #f2f0eb;
+  --sv-surface-raised: #ffffff;
+  --sv-border: #d3cfc7;
+  --sv-divider: #c9c5bc;
+  --sv-text: #1f1f1f;
+  --sv-text-strong: #000000;
+  --sv-text-dim: #66635d;
+  --sv-text-faint: #9a968e;
+  --sv-accent: #d9600a;
+  --sv-accent-hover: #e8700f;
+  --sv-on-accent: #ffffff;
+  --sv-ok: #2b8a3e;
+  --sv-warn: #e67700;
+  --sv-err: #c92a2a;
+  --sv-info: #1971c2;
+  --sv-focus: 0 0 0 2px #d9600a66;
+  --sv-shadow-paper: 0 1px 8px #0003;
+  --sv-shadow-pop: 0 6px 20px #0003;
+  --sv-shadow-dlg: 0 16px 48px #0004;
+  --sv-toast-bg: #1f1f1fe6;
+  --sv-empty-text: #8a867e;
+}
+
+html[data-density="compact"] {
+  --sv-control-h: 24px;
+  --sv-control-pad-x: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --sv-motion: 0s; }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { display: flex; flex-direction: column; background: var(--sv-bg); color: var(--sv-text);
+       font: var(--sv-fs-body)/1.3 var(--sv-font); }
+
+/* ---------------------------------------------------------------- bars */
+header { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sv-space-3) 14px; padding: 7px var(--sv-space-5);
+         background: var(--sv-surface-1); border-bottom: 1px solid var(--sv-divider); }
+header .group { display: flex; align-items: center; gap: var(--sv-space-3); }
+header label { color: var(--sv-text-dim); }
+#featureBar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sv-space-3) 14px; padding: 5px var(--sv-space-5);
+              background: var(--sv-surface-2); border-bottom: 1px solid var(--sv-divider); }
+#featureBar .group { display: flex; align-items: center; gap: var(--sv-space-3); }
+#status { margin-left: auto; display: flex; align-items: center; gap: var(--sv-space-4); white-space: nowrap; }
+#dot { width: 9px; height: 9px; border-radius: 50%; background: var(--sv-err); }
+#dot.ok { background: var(--sv-ok); }
+#title { font-weight: 600; color: var(--sv-text-strong); }
+#renderTime { color: var(--sv-text-dim); font-size: var(--sv-fs-small); }
+
+/* ---------------------------------------------------------------- controls: one height, one radius */
+.btn, .seg, header select, #featureBar select, header input[type=text], header input[type=number] { min-height: var(--sv-control-h); }
+.btn[hidden], .seg[hidden] { display: none; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--sv-space-2);
+       background: var(--sv-surface-3); color: var(--sv-text); border: 1px solid var(--sv-border); border-radius: var(--sv-radius-sm);
+       padding: 0 var(--sv-control-pad-x); cursor: pointer; font: inherit; line-height: 1.2;
+       transition: border-color var(--sv-motion), background-color var(--sv-motion); }
+.btn:hover { border-color: var(--sv-accent); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn:disabled:hover { border-color: var(--sv-border); }
+.btn.primary { background: var(--sv-accent); border-color: var(--sv-accent); color: var(--sv-on-accent); font-weight: 600; }
+.btn.primary:hover { background: var(--sv-accent-hover); }
+.btn.warn { border-color: var(--sv-warn); color: var(--sv-warn); }
+
+/* segmented control: the chosen segment is raised and underlined, not filled with the accent */
+.seg { display: inline-flex; border: 1px solid var(--sv-border); border-radius: var(--sv-radius-sm); overflow: hidden; }
+.seg button { background: var(--sv-surface-3); color: var(--sv-text); border: 0; padding: 0 var(--sv-control-pad-x); cursor: pointer; font: inherit;
+              transition: background-color var(--sv-motion); }
+.seg button:hover { background: var(--sv-surface-hover); }
+.seg button + button { border-left: 1px solid var(--sv-border); }
+.seg button.on { background: var(--sv-surface-raised); color: var(--sv-text-strong); font-weight: 600;
+                 box-shadow: inset 0 -2px 0 var(--sv-accent); }
+
+select, input[type=range] { background: var(--sv-surface-3); color: var(--sv-text); border: 1px solid var(--sv-border);
+                            border-radius: var(--sv-radius-sm); font: inherit; padding: 2px 4px; }
+input[type=range] { min-height: 0; }
+input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(--sv-accent); }
+.btn:focus-visible, .seg button:focus-visible, select:focus-visible, #helpToggle:focus-visible { outline: none; box-shadow: var(--sv-focus); }
+kbd { font-family: var(--sv-font-mono); }
+
+/* ---------------------------------------------------------------- paper */
+main { flex: 1; overflow: auto; position: relative; outline: none; }
+#paper { background: var(--sv-paper); margin: var(--sv-space-6); padding: var(--sv-space-4) 0; min-height: 200px; box-shadow: var(--sv-shadow-paper);
+         width: fit-content; min-width: calc(100% - 32px); }
+#paper svg { display: block; }
+#paper g.note, #paper g.chord { cursor: pointer; }
+#paper .sel, #paper .sel * { fill: var(--sv-sel) !important; stroke: var(--sv-sel); }
+#paper .play, #paper .play * { fill: var(--sv-play) !important; }
+#empty { color: var(--sv-empty-text); padding: 40px; font-size: 15px; text-align: center; }
+#drop { position: fixed; inset: 0; background: var(--sv-drop-bg); border: 3px dashed var(--sv-accent); display: none;
+        align-items: center; justify-content: center; font-size: 22px; color: #fff; z-index: var(--sv-z-dialog); }
+body.dragging #drop { display: flex; }
+
+/* ---------------------------------------------------------------- footer (shortcuts) */
+footer { position: relative; max-height: 1.55em; overflow: hidden; padding: 5px 110px 5px var(--sv-space-5);
+         background: var(--sv-surface-1); border-top: 1px solid var(--sv-divider); color: var(--sv-text-dim); font-size: var(--sv-fs-control); }
+footer.open { max-height: 45vh; overflow: auto; }
+#helpToggle { position: absolute; right: 10px; top: 3px; background: var(--sv-surface-3); color: var(--sv-text); border: 1px solid var(--sv-border);
+              border-radius: var(--sv-radius-sm); font: var(--sv-fs-small) var(--sv-font); padding: 1px var(--sv-space-4); cursor: pointer; }
+footer kbd { background: var(--sv-surface-3); border: 1px solid var(--sv-border); border-radius: 3px; padding: 0 4px; color: var(--sv-text);
+             font: var(--sv-fs-small) var(--sv-font-mono); }
+
+/* ---------------------------------------------------------------- Tracks menu */
+.dropdown { position: relative; }
+#trackPanel { position: absolute; top: calc(100% + 4px); left: 0; z-index: var(--sv-z-menu); background: var(--sv-surface-1);
+              border: 1px solid var(--sv-border); border-radius: var(--sv-radius-md); padding: var(--sv-space-4) 10px; min-width: 230px;
+              max-height: 70vh; overflow: auto; box-shadow: var(--sv-shadow-pop); }
+#trackPanel label { display: block; padding: 2px 0; color: var(--sv-text); white-space: nowrap; }
+#trackPanel a { color: var(--sv-accent); cursor: pointer; }
+#trackList { margin-top: var(--sv-space-3); border-top: 1px solid var(--sv-border); padding-top: var(--sv-space-2); }
+#trackList label { padding-left: 10px; }
+.tgroup { color: var(--sv-text-dim); font-size: var(--sv-fs-small); text-transform: uppercase; letter-spacing: .05em; margin-top: var(--sv-space-3); }
+#trackPanel .hint { color: var(--sv-text-dim); font-size: var(--sv-fs-small); white-space: normal; margin-top: var(--sv-space-2); max-width: 240px; }
+#trackPanel .cur { color: var(--sv-accent); font-size: var(--sv-fs-small); }
+
+/* ---------------------------------------------------------------- toast */
+#flash { position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%); background: var(--sv-toast-bg); color: var(--sv-toast-text);
+         padding: var(--sv-space-4) 14px; border-radius: var(--sv-radius-md); z-index: var(--sv-z-toast); }
+
+.hidden { display: none !important; }
+
+/* ---------------------------------------------------------------- shortcut table (core/shortcuts.js) */
+#svKeys { margin-top: var(--sv-space-4); color: var(--sv-text); }
+#svKeys .svk-title { font-weight: 700; }
+#svKeys .svk-ctx { display: inline-block; vertical-align: top; margin: var(--sv-space-2) var(--sv-space-6) var(--sv-space-2) 0; }
+#svKeys .svk-h { font-weight: 700; color: var(--sv-text-dim); margin: var(--sv-space-2) 0; }
+#svKeys table { border-collapse: collapse; }
+#svKeys td { padding: 1px var(--sv-space-3) 1px 0; vertical-align: top; }
+#svKeys td:first-child { white-space: nowrap; }
+#svKeys .svk-own { color: var(--sv-text-dim); font-size: var(--sv-fs-small); }

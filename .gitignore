@@ -1,0 +1,15 @@
+node_modules/
+build/
+test/out.*
+test/full.*
+test/chrome-prof/
+*.log
+.claude/
+# test outputs (screenshots, PDFs, crawl dumps: test/out-crawl.json is written and re-read by crawl-run.mjs)
+test/out-*
+test/out_*
+# scratch scripts
+test/debug-tmp*
+test/scratch-*
+tools/probe/build/
+lib/

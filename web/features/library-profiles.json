@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "about": "Which controls a level curve (0..1) drives, per library. Shared by web/features/library-profiles.js (page) and src/claude/scoreview/CurvePlayer.java (read from the jar at start-up: every vst3/remote target gets a Bitwig Parameter in init()). Target kinds: vst3 (plugin = VST3 class id from Bitwig's plug-in cache, param = VST3 parameter id), remote (index = remote control of the device's current page, 0-based), cc (MIDI CC sent to the track, experimental). role: dynamics = carries the shape; expression = the second slider of a dual-control library. value = min + (max - min) * level^gamma. See docs/features/library-profiles.md.",
+  "profiles": [
+    {
+      "id": "pocket-strings",
+      "name": "Crow Hill Pocket Strings",
+      "match": { "vst3": ["ABCDEF019182FAEB5443484344443032"], "names": ["Pocket Strings"] },
+      "targets": [
+        { "id": "timbre", "label": "Timbre", "kind": "vst3", "plugin": "ABCDEF019182FAEB5443484344443032", "param": 48, "role": "dynamics", "min": 0.04, "max": 1, "gamma": 1 },
+        { "id": "expression", "label": "Expression", "kind": "vst3", "plugin": "ABCDEF019182FAEB5443484344443032", "param": 49, "role": "expression", "min": 0.42, "max": 1, "gamma": 0.8 }
+      ]
+    },
+    {
+      "id": "bbcso",
+      "name": "Spitfire BBC Symphony Orchestra",
+      "match": { "vst3": ["56535453616E746262632073796D7068"], "names": ["BBC Symphony Orchestra", "BBCSO"] },
+      "targets": [
+        { "id": "dynamics", "label": "Dynamics", "kind": "vst3", "plugin": "56535453616E746262632073796D7068", "param": 20, "role": "dynamics", "min": 0.04, "max": 1, "gamma": 1 },
+        { "id": "expression", "label": "Expression", "kind": "vst3", "plugin": "56535453616E746262632073796D7068", "param": 10, "role": "expression", "min": 0.5, "max": 1, "gamma": 0.8 }
+      ]
+    },
+    {
+      "id": "spitfire-cc",
+      "name": "Spitfire (Kontakt, CC1 + CC11)",
+      "experimental": true,
+      "note": "Sent to the track with Track.sendMidi: the plug-in follows it (probe), but Bitwig does not record it as automation, so Render only plays it.",
+      "match": { "names": ["Kontakt", "Albion", "Spitfire", "LABS", "Kepler", "Stratus", "Solstice", "Tutti"] },
+      "targets": [
+        { "id": "cc1", "label": "CC1 Dynamics", "kind": "cc", "cc": 1, "role": "dynamics", "min": 0.04, "max": 1, "gamma": 1 },
+        { "id": "cc11", "label": "CC11 Expression", "kind": "cc", "cc": 11, "role": "expression", "min": 0.5, "max": 1, "gamma": 0.8 }
+      ]
+    },
+    {
+      "id": "pigments",
+      "name": "Arturia Pigments",
+      "note": "Macro 1 must be remote control 1 of the device's current remote-controls page in Bitwig (Pigments' VST3 macro id is not known yet; once probed, add a vst3 target).",
+      "match": { "vst3": ["41727475415649534B61743150726F63"], "names": ["Pigments"] },
+      "targets": [
+        { "id": "macro1", "label": "Macro 1 (remote control 1)", "kind": "remote", "index": 0, "role": "dynamics", "min": 0, "max": 1, "gamma": 1 }
+      ]
+    },
+    {
+      "id": "velocity",
+      "name": "Velocity only",
+      "fallback": true,
+      "match": { "names": [] },
+      "targets": []
+    }
+  ]
+}

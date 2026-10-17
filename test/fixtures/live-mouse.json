@@ -1,0 +1,5 @@
+{"source":"arranger","exists":true,"track":"Violin 1","stepsPerBeat":24,"length":8,"num":4,"den":4,"playStart":0,"loop":false,"loopStart":0,"loopLength":8,
+ "notes":[{"ch":0,"x":0,"y":72,"d":1,"vel":100,"sel":false},{"ch":0,"x":24,"y":74,"d":1,"vel":100,"sel":false},
+          {"ch":0,"x":48,"y":76,"d":1,"vel":100,"sel":false},{"ch":0,"x":72,"y":77,"d":1,"vel":100,"sel":false},
+          {"ch":0,"x":96,"y":67,"d":2,"vel":90,"sel":false},{"ch":0,"x":144,"y":69,"d":2,"vel":80,"sel":false},
+          {"ch":0,"x":144,"y":72,"d":2,"vel":80,"sel":false}]}
