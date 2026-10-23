@@ -22,7 +22,7 @@ Notation (p/f marks, hairpins, expressions) → per-library control curves, writ
   `web/features/passage.js`, docs/features/passage.md.
 * **Score mode shows every track with notes after a Read arrangement** (today "Tracks: N shown" can leave only the
   selected track visible — Josh could only see Pocket Strings or Pigments, never both).
-* **"Read is out of date" indicator** on ⟳ Read arrangement when a track other than the live one changed since the last
+* **"Read is out of date" indicator** on ⟳ Read project when a track other than the live one changed since the last
   read (Score mode otherwise silently shows the old snapshot).
 * Inspire Melody in Clip mode also uses the last arrangement read (not only the remembered pad) to find the chords.
 * Done first (branch wave2-pre): the three items above, plus `SV.addToolbar(el, {cluster, order})` and the

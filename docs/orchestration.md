@@ -51,7 +51,7 @@ home}, home:{track, start}, results:["ok: goto Viola @ 0", "error: goto … : wh
 
 ## Using it
 
-1. In Bitwig: click any clip in the Arranger (focus), press **⟳ Read arrangement** in Score View.
+1. In Bitwig: click any clip in the Arranger (focus), press **⟳ Read project** in Score View.
 2. Score mode: select notes of the live (✎) clip — or choose *Staves, bars* as the source in the dialog.
 3. **Orchestrate ▾** (or the shortcut) opens the dialog; it stays open while you select notes:
    * **Explode** (<kbd>Alt</kbd>+<kbd>X</kbd>) — each chord's notes go top-down to the target instruments (ordered by
@@ -65,7 +65,7 @@ home}, home:{track, start}, results:["ok: goto Viola @ 0", "error: goto … : wh
      folded into its range.
 4. The preview lists what each target gets and which targets cannot be written. **Write into Bitwig** sends one batch
    per target track. Targets without a clip at that place are reported — *"No clip on Basses at bar 1 — create one in
-   Bitwig (or lengthen it), then Read arrangement again"* — and nothing is written for them. Clips that loop more than
+   Bitwig (or lengthen it), then Read project again"* — and nothing is written for them. Clips that loop more than
    once are refused (a note would repeat in every pass).
 5. The written tracks are pinned for the session and the score is rebuilt from the updated crawl.
 
@@ -92,7 +92,7 @@ holding a 4-note chord in bar 1 and a melody in bar 2. Collapse the Strings grou
 
 | # | step | expect |
 |---|---|---|
-| L1 | Click the Piano clip, **⟳ Read arrangement** | Score mode with the clips; `GET /api/nav` → `state: idle` |
+| L1 | Click the Piano clip, **⟳ Read project** | Score mode with the clips; `GET /api/nav` → `state: idle` |
 | L2 | Select the bar-1 chord, <kbd>Alt</kbd>+<kbd>X</kbd>, untick Basses, *Write into Bitwig* | Bitwig's selection visits the string clips and returns to the Piano clip; group collapsed again; play start marker back on the Piano clip; Vln I/II/Vla/Vc each hold one chord note (check in Bitwig's editor); the page shows them |
 | L3 | `GET /api/nav` | `state: done`, `results` all `ok`, `batches` = 4, `session: false` |
 | L4 | Repeat with Basses ticked | dialog/flash: *No clip on Basses at bar 1 — create one in Bitwig*; the four others written again (unchanged); nothing in Basses |

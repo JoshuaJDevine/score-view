@@ -13,7 +13,7 @@
   });
   if (store.get('helpOpen', false)) $('helpToggle').click();
 
-  C.markSeg('rangeSeg', 'range', state.range);
+  C.applyView(); // the Clip / Score view sets the mode, bars and tracks
   // Start once Verovio's runtime is up AND every <script> has run (feature modules register hooks and 'sv-ready'
   // listeners as they load). Verovio compiles its wasm asynchronously while the scripts load one by one, so it may
   // be ready before this file runs (Emscripten sets calledRun just before calling onRuntimeInitialized) or before the
@@ -26,12 +26,11 @@
 
   function start() {
     C.tk = new verovio.toolkit();
+    C.engrave.warm(); // the engraving worker compiles its own Verovio meanwhile (big scores engrave there)
     C.lastW = $('main').clientWidth;
     C.setMode(live ? state.mode : 'score');
     C.flushRender(); // the first render happens before 'sv-ready', as before
     C.renderTrackList();
-    C.restoreBase();
-    C.watchBase();
     if (live) { C.pollNotes(); C.pollPlay(); }
     window.dispatchEvent(new Event('sv-ready'));
   }

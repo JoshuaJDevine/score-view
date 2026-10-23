@@ -119,6 +119,26 @@
     sortEntry(t);
     return added;
   }
+  /**
+   * Moves a track's items that were entered in a clip (item.ck = clip identity, item.co = the arranger beat its content
+   * beat 0 was believed to be at) to where that clip's content really starts: origin. allow(item) decides per item.
+   * Returns how many moved. Used when the clip's position becomes known exactly (playhead, Read) or the clip moved.
+   */
+  function reanchor(t, ck, origin, allow = () => true) {
+    let n = 0;
+    const move = (it, keys) => {
+      const dlt = origin - it.co;
+      keys.forEach(k => { it[k] = r4(it[k] + dlt); });
+      if (Number.isFinite(it.clip)) it.clip = r4(it.clip + dlt);
+      it.co = origin; it.or = 2; n++;
+    };
+    const due = it => it.ck === ck && Number.isFinite(it.co) && Math.abs(it.co - origin) > 1e-6 && allow(it);
+    t.marks.forEach(m => { if (due(m)) move(m, ['beat']); });
+    t.hairpins.forEach(h => { if (due(h)) move(h, ['start', 'end']); });
+    if (n) sortEntry(t);
+    return n;
+  }
+
   /** Removes items by id (any track); returns how many went. */
   function removeIds(doc, ids) {
     const set = new Set(ids);
@@ -279,10 +299,10 @@
     const inRamp = b => model.ramps.find(r => b > r.s + 1e-6 && b < r.e - 1e-6);
     const variation = opts.variation || {};
     if (variation.on && variation.amount > 0) {
-      // drift points in long holds: every 2 beats, away from jumps and hairpins
+      // drift points within a held dynamic: every beat, away from jumps and hairpins
       const marks = pts.map(p => p.beat);
-      for (let b = Math.ceil(from / 2) * 2 + 2; b < to - 1; b += 2) {
-        if (inRamp(b) || marks.some(m => Math.abs(m - b) < 1)) continue;
+      for (let b = Math.ceil(from) + 1; b < to - 0.5; b += 1) {
+        if (inRamp(b) || marks.some(m => Math.abs(m - b) < 0.5)) continue;
         add(b, model.at(b), 'drift');
       }
     }
@@ -294,10 +314,11 @@
       if (last && Math.abs(last.beat - p.beat) < 1e-6) out[out.length - 1] = p; else out.push(p);
     });
     if (variation.on && variation.amount > 0) {
-      const amp = 0.05 * Math.min(1, variation.amount), seed = variation.seed || 1;
+      // about a quarter of a dynamic step at the default amount (0.35): moving, but still inside the dynamic
+      const amp = 0.12 * Math.min(1, variation.amount), seed = variation.seed || 1;
       out.forEach(p => {
         const r = inRamp(p.beat);
-        const env = r ? 0.4 + 0.6 * Math.sin(Math.PI * (p.beat - r.s) / (r.e - r.s)) : 0.4;
+        const env = r ? 0.5 + 0.5 * Math.sin(Math.PI * (p.beat - r.s) / (r.e - r.s)) : 0.6;
         p.v = p.v + amp * env * smoothNoise(seed, p.beat / 1.7);
       });
     }
@@ -367,55 +388,59 @@
     return VEL_TABLE[VEL_TABLE.length - 1][1];
   }
   const clampVel = v => Math.max(1, Math.min(127, Math.round(v)));
-  const mean = a => a.reduce((s, x) => s + x, 0) / (a.length || 1);
 
   /**
-   * New velocities for notes [{id, start (arranger beats), vel (1..127)}] of one track: each dynamic mark scales the
-   * notes it governs (from it to the next dynamic) so their average is the mark's velocity, keeping accents; fp = f on
-   * its first chord, p after; sfz & co. raise only the note they sit on. opts = { marks (default true), hairpins
-   * (default false: notes under a hairpin follow its curve), only: Set of mark/hairpin ids to apply (default all),
-   * model (levelModel, for hairpins) }. -> [{id, vel}] (changed notes only).
+   * One note's velocity at a dynamic level, played by a person: the level's velocity, a small lift on the downbeat
+   * (less on the other beats) and a seeded wobble of ±humanize per note (the same note always gets the same value, so
+   * applying twice changes nothing). note = {start (arranger beats), pitch}; o = { humanize, seed, barBeats }.
+   */
+  function humanVelocity(level, note, o = {}) {
+    const H = o.humanize || 0;
+    let v = levelToVelocity(level);
+    if (H > 0) {
+      const mb = o.barBeats || 4, pos = ((note.start % mb) + mb) % mb;
+      if (Math.abs(pos - Math.round(pos)) < EPS) v += (pos < EPS || mb - pos < EPS) ? 0.6 * H : 0.25 * H;
+      v += H * hash(o.seed || 1, Math.round(note.start * 96) * 131 + (note.pitch || 0));
+    }
+    return clampVel(v);
+  }
+
+  /**
+   * Velocities from the dynamics for notes [{id, start (arranger beats), vel, pitch?}] of one track: every note a dynamic
+   * governs (from the first dynamic on; under a hairpin, its curve) gets humanVelocity of the level at its start; fp = f
+   * on its first chord, p after; sfz & co. lift the note they sit on to at least 118 (sffz 124). opts = { marks (default
+   * true), hairpins (default true; false: hairpins leave velocities alone), only: Set of mark / hairpin ids (just the
+   * notes those govern), ids: Set of note ids (just those notes), humanize (velocity units, default 0), seed, barBeats,
+   * shape, strength }. -> [{id, vel}] (changed notes only).
    */
   function planVelocities(entry, notes, opts = {}) {
-    const o = Object.assign({ marks: true, hairpins: false }, opts);
+    const o = Object.assign({ marks: true, hairpins: true, humanize: 0, seed: 1, barBeats: 4 }, opts);
     const want = id => !o.only || o.only.has(id);
-    const out = new Map();
-    const cur = n => (out.has(n.id) ? out.get(n.id) : n.vel);
     const marks = (entry.marks || []).slice().sort((a, b) => a.beat - b.beat);
     const governing = marks.filter(m => !ACCENTS[m.text] || m.text === 'sfp');
-    if (o.marks) {
-      governing.forEach((m, i) => {
-        if (!want(m.id)) return;
-        const end = i + 1 < governing.length ? governing[i + 1].beat : Infinity;
-        const group = notes.filter(n => n.start >= m.beat - EPS && n.start < end - EPS);
-        if (!group.length) return;
-        const scale = (list, target) => { const avg = mean(list.map(cur)); list.forEach(n => out.set(n.id, clampVel(cur(n) * target / avg))); };
-        if (m.text === 'fp' || m.text === 'sfp') {
-          const first = group.filter(n => n.start < m.beat + EPS), rest = group.filter(n => n.start >= m.beat + EPS);
-          if (first.length) scale(first, m.text === 'fp' ? VELOCITY.f : VELOCITY.ff);
-          if (rest.length) scale(rest, VELOCITY.p);
-        } else scale(group, VELOCITY[m.text]);
-      });
-      marks.filter(m => ACCENTS[m.text] && m.text !== 'sfp' && want(m.id)).forEach(m => {
-        notes.filter(n => Math.abs(n.start - m.beat) < EPS).forEach(n => out.set(n.id, Math.max(cur(n), m.text === 'sffz' ? 124 : 118)));
-      });
-    }
-    if (o.hairpins) {
-      const model = o.model || levelModel(entry);
-      (entry.hairpins || []).filter(h => want(h.id)).forEach(h => {
-        const group = notes.filter(n => n.start >= h.start - EPS && n.start < h.end - EPS);
-        if (!group.length) return;
-        const avg = mean(group.map(cur));
-        group.forEach(n => out.set(n.id, clampVel(levelToVelocity(model.at(n.start)) * cur(n) / avg)));
-      });
-    }
+    const hairpins = o.hairpins ? (entry.hairpins || []) : [];
+    const shape = {};
+    if (o.shape != null) shape.shape = o.shape;
+    if (o.strength != null) shape.strength = o.strength;
+    const model = levelModel(o.hairpins ? entry : { marks: entry.marks, hairpins: [] }, shape);
+    const regions = [];
+    if (o.marks) governing.forEach((m, i) => { if (want(m.id)) regions.push([m.beat, i + 1 < governing.length ? governing[i + 1].beat : Infinity]); });
+    hairpins.forEach(h => { if (want(h.id)) regions.push([h.start, h.end]); });
+    const scope = notes.filter(n => !o.ids || o.ids.has(n.id));
+    const out = new Map();
+    scope.forEach(n => {
+      if (regions.some(([a, b]) => n.start >= a - EPS && n.start < b - EPS)) out.set(n.id, humanVelocity(model.at(n.start), n, o));
+    });
+    if (o.marks) marks.filter(m => ACCENTS[m.text] && m.text !== 'sfp' && want(m.id)).forEach(m => {
+      scope.filter(n => Math.abs(n.start - m.beat) < EPS).forEach(n => out.set(n.id, Math.max(out.has(n.id) ? out.get(n.id) : n.vel, m.text === 'sffz' ? 124 : 118)));
+    });
     const byId = new Map(notes.map(n => [n.id, n.vel]));
     return [...out].filter(([id, v]) => v !== byId.get(id)).map(([id, vel]) => ({ id, vel }));
   }
 
   const pure = { LEVELS, VELOCITY, ACCENTS, MARK_NAMES, PALETTE, SHAPES, MAX_PER_HAIRPIN, parseEntry, planEntry, emptyDoc,
     normalizeDoc, entryOf, addEntry, removeIds, removeRange, findItem, shapeU, levelModel, thin, smoothNoise, levelPoints,
-    interp, targetPoints, buildCurves, pointsText, curveOps, levelToVelocity, planVelocities, seedOf };
+    interp, targetPoints, buildCurves, pointsText, curveOps, levelToVelocity, humanVelocity, planVelocities, seedOf, reanchor };
   if (typeof module !== 'undefined' && module.exports) { module.exports = pure; return; }
 
   // ================================================================== page
@@ -427,9 +452,15 @@
 
   // ---- preferences (Josh's rule: every behaviour someone may want differently is a saved preference)
   const PREF_KEY = 'scoreview.dynamics.prefs';
-  const DEFAULTS = { shape: 's', strength: 0.7, variation: true, amount: 0.35, velMarks: true, velHairpins: false,
-    keys: 'sibelius', profiles: {} };
-  const prefs = (() => { try { return Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem(PREF_KEY)) || {}); } catch (e) { return Object.assign({}, DEFAULTS); } })();
+  const DEFAULTS = { shape: 's', strength: 0.7, variation: true, amount: 0.35, velMarks: true, velHairpins: true,
+    velNew: true, humanize: 4, keys: 'sibelius', profiles: {}, pv: 2 };
+  const prefs = (() => {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(PREF_KEY)); } catch (e) { /* defaults */ }
+    const p = Object.assign({}, DEFAULTS, saved || {});
+    if (saved && !saved.pv) { p.velHairpins = true; p.pv = 2; } // v2: hairpins shape velocities by default
+    return p;
+  })();
   const savePrefs = () => { try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch (e) { /* ignore */ } };
 
   // ---- the marks document: loaded from the Bitwig project, saved back after each change
@@ -459,27 +490,101 @@
   // ---- where the live clip sits in the arrangement
   let transportStart = { key: null, beat: null };
   const clipKey = d => [d.track, d.length, d.playStart, d.loopStart, d.loopLength].join('|');
+  const clipIdent = d => [d.length, d.loopStart, d.loopLength].join('|'); // item.ck: which clip of the track
+  const learned = new Map(); // clipKey -> content origin measured from the playhead while the clip played (exact)
   /**
-   * Arranger beat of the live clip's content beat 0 -> { origin, how } | null: the Score-mode placement, else the last
-   * ⟳ Read arrangement, else the play start marker (Bitwig moves it to a clip you select).
+   * Arranger beat of the live clip's content beat 0 -> { origin, how, rank } | null. rank 2 = exact (measured from the
+   * playhead while it played, or a ⟳ Read project), 1 = Score-mode placement by note matching, 0 = the play start
+   * marker (Bitwig moves it to a clip you select, but it may have moved since: a guess).
    */
   function liveOrigin() {
     const S = SV.state, d = S.liveData;
     if (!d || !d.exists || S.source !== 'arranger') return null;
     const ps = d.playStart || 0;
-    if (S.mode === 'score' && S.align && S.align.track === d.track) return { origin: S.align.offset - ps, how: 'placement' };
+    if (learned.has(clipKey(d))) return { origin: learned.get(clipKey(d)), how: 'playhead', rank: 2 };
+    if (S.mode === 'score' && S.align && S.align.track === d.track) return { origin: S.align.offset - ps, how: 'placement', rank: S.align.how === 'playhead' ? 2 : S.align.how === 'guess' ? 0 : 1 };
     const m = SV.arrangement && SV.arrangement.liveClip ? SV.arrangement.liveClip() : null;
-    if (m) return { origin: m.clip.start - m.clip.playStart, how: 'read' };
-    if (transportStart.key === clipKey(d) && transportStart.beat != null) return { origin: transportStart.beat - ps, how: 'play start' };
+    if (m) return { origin: m.clip.start - m.clip.playStart, how: 'read', rank: 2 };
+    if (transportStart.key === clipKey(d) && transportStart.beat != null) return { origin: transportStart.beat - ps, how: 'play start', rank: 0 };
     return null;
   }
   SV.hooks.liveData.push(d => {
     if (!d || !d.exists) return;
     const k = clipKey(d);
+    // The extension reports the marker with the data (selPlayStart); the page core keeps it, from settled snapshots
+    // only, as state.playStartGuess (core/sources.js refreshPlayStartGuess, same clip key).
+    if ('selPlayStart' in d) {
+      const g = SV.state.playStartGuess;
+      if (transportStart.key !== k) transportStart = { key: k, beat: null };
+      if (!g || g.key !== k || g.beat == null || g.beat === transportStart.beat) return;
+      transportStart.beat = g.beat;
+      if (doc.tracks[d.track]) SV.requestRender(); // only marks on this track depend on it
+      return;
+    }
     if (transportStart.key === k) return;
     transportStart = { key: k, beat: null };
-    fetch('/api/transport', { cache: 'no-store' }).then(r => r.json())
-      .then(t => { if (transportStart.key === k && !t.playing) { transportStart.beat = t.playStart; SV.requestRender(); } }).catch(() => {});
+    // Bitwig moves the marker to a newly selected clip a moment after it reports the clip: ask once it has
+    setTimeout(() => {
+      if (transportStart.key !== k) return;
+      fetch('/api/transport', { cache: 'no-store' }).then(r => r.json())
+        .then(t => {
+          if (transportStart.key !== k || t.playing) return;
+          transportStart.beat = t.playStart;
+          if (doc.tracks[d.track]) SV.requestRender(); // only marks on this track depend on it
+        }).catch(() => {});
+    }, 400);
+  });
+  // While an arranger clip plays, its content starts exactly at playhead - step (snapped: the two jitter ~0.1 beat).
+  // A clip whose loop repeats is used only while the step is before the loop start (the first pass).
+  SV.hooks.play.push(p => {
+    const d = SV.state.liveData;
+    if (!p || !p.playing || !(p.step >= 0) || !d || !d.exists || SV.state.source !== 'arranger' || !SV.core.playheadOffset) return;
+    const repeats = d.loop && d.length > (d.loopStart || 0) + (d.loopLength || 0) + 1e-6;
+    if (repeats && !(p.step / (d.stepsPerBeat || 24) < (d.loopStart || 0))) return;
+    const o = SV.core.playheadOffset(p.pos - p.step / (d.stepsPerBeat || 24));
+    const k = clipKey(d);
+    if (o < 0 || learned.get(k) === o) return;
+    learned.set(k, o);
+    reanchorLive();
+  });
+
+  /**
+   * Once the live clip's position is exact, dynamics entered in it at a guessed position move there; ones entered at
+   * an exact position move only when the clip itself moved (a Read no longer has a clip of the track at their old
+   * place; otherwise they belong to a copy of this clip).
+   */
+  function reanchorLive() {
+    const d = SV.state.liveData, o = liveOrigin();
+    if (!d || !d.exists || !o || o.rank < 2 || !doc.tracks[d.track]) return 0;
+    const crawl = SV.state.crawl && SV.state.crawl.result;
+    const readOrigins = crawl ? crawl.filter(c => c.track === d.track).map(c => c.start - (c.playStart || 0)) : null;
+    const n = reanchor(doc.tracks[d.track], clipIdent(d), o.origin,
+      it => (it.or || 0) < 2 || (readOrigins && !readOrigins.some(x => Math.abs(x - it.co) < 1e-4)));
+    if (n) {
+      saveDoc(); SV.requestRender(); refreshPanel();
+      SV.flash(`Dynamics: ${n} moved to where the ${d.track} clip really starts (bar ${Math.floor(o.origin / mbNow() + 1e-6) + 1})`);
+    }
+    return n;
+  }
+  SV.hooks.liveData.push(() => { reanchorLive(); });
+
+  // New or moved notes under a dynamic get its velocity (prefs.velNew). Compared between settled states only (on a
+  // clip switch Bitwig swaps notes one by one before it reports the new track), not while playing (recorded notes
+  // keep the velocity they were played with), and not when most notes changed at once (another clip was selected).
+  let seen = { key: null, ids: null };
+  SV.hooks.liveSettled.push(d => {
+    if (!d || !d.exists) { seen = { key: null, ids: null }; return; }
+    const k = [d.track, d.playStart, d.loopStart].join('|');
+    const ids = new Set(d.notes.filter(n => n.y >= 24).map(n => SV.liveId(n)));
+    const prev = seen.key === k ? seen.ids : null;
+    seen = { key: k, ids };
+    if (!prev || !prefs.velNew || !prefs.velMarks || SV.state.playing || !doc.tracks[d.track]) return;
+    const fresh = new Set([...ids].filter(id => !prev.has(id)));
+    if (!fresh.size) return;
+    const kept = [...prev].filter(id => ids.has(id)).length;
+    if (prev.size > 2 && kept < prev.size / 2) return;
+    const o = liveOrigin();
+    if (o) applyVelocities(d.track, o, null, fresh);
   });
 
   /** The selected live notes (no keyswitches) in arranger beats -> { track, start, end, notes, origin } | { error }. */
@@ -488,7 +593,7 @@
     if (!d || !d.exists) return { error: 'Select notes of the live clip first' };
     if (S.source !== 'arranger') return { error: 'Dynamics live on the arranger timeline: switch Score View to Arranger' };
     const o = liveOrigin();
-    if (!o) return { error: 'Where is this clip in the arrangement? Use Score mode or ⟳ Read arrangement first' };
+    if (!o) return { error: 'Where is this clip in the arrangement? Use Score mode or ⟳ Read project first' };
     const spb = d.stepsPerBeat || 24;
     const ids = new Set([...S.selection].filter(id => SV.isLive(id)));
     const notes = d.notes.filter(n => n.y >= 24 && ids.has(SV.liveId(n)))
@@ -512,7 +617,7 @@
   /** The live clip's notes in arranger beats (for velocities). */
   function liveTrackNotes(o) {
     const d = SV.state.liveData, spb = d.stepsPerBeat || 24;
-    return d.notes.filter(n => n.y >= 24).map(n => ({ id: SV.liveId(n), ch: n.ch, x: n.x, y: n.y, start: n.x / spb + o.origin, vel: n.vel }));
+    return d.notes.filter(n => n.y >= 24).map(n => ({ id: SV.liveId(n), ch: n.ch, x: n.x, y: n.y, pitch: n.y, start: n.x / spb + o.origin, vel: n.vel }));
   }
 
   /** Enters typed dynamics over the selected notes ("p<f", "mf", "<", ">", "<>", "sfz"). Returns true when something was added. */
@@ -523,21 +628,23 @@
     if (span.error) { SV.flash(span.error); return false; }
     const plan = planEntry(parsed.tokens, span);
     if (opts.shape) plan.hairpins.forEach(h => { if (!h.shape) h.shape = opts.shape; });
-    const added = addEntry(doc, span.track, plan, { clip: r4(span.origin.origin + (SV.state.liveData.playStart || 0)) });
+    const d = SV.state.liveData, o = span.origin;
+    const added = addEntry(doc, span.track, plan, { clip: r4(o.origin + (d.playStart || 0)), co: r4(o.origin), ck: clipIdent(d), or: o.rank || 0 });
     saveDoc();
-    applyVelocities(span.track, span.origin, new Set(added.marks.map(m => m.id).concat(added.hairpins.map(h => h.id))));
+    const nv = applyVelocities(span.track, o, new Set(added.marks.map(m => m.id).concat(added.hairpins.map(h => h.id))));
     SV.requestRender();
     refreshPanel();
-    SV.flash(`${span.track}: ${String(text).trim()} · stored in the Bitwig project`);
+    SV.flash(`${span.track}: ${String(text).trim()}` + (nv ? ` · ${nv} velocities set` : '') + ' · the library\'s controls change on Render (Dynamics ▾)'
+      + (o.rank ? '' : ' · clip position guessed from the play start marker: play the clip once to confirm it'));
     return true;
   }
 
-  function applyVelocities(track, origin, only) {
+  function applyVelocities(track, origin, only, ids) {
     if (!prefs.velMarks && !prefs.velHairpins) return 0;
     const entry = entryOf(doc, track);
     const notes = liveTrackNotes(origin);
-    const plan = planVelocities(entry, notes, { marks: prefs.velMarks, hairpins: prefs.velHairpins, only,
-      model: levelModel(entry, { shape: prefs.shape, strength: prefs.strength }) });
+    const plan = planVelocities(entry, notes, { marks: prefs.velMarks, hairpins: prefs.velHairpins, only, ids,
+      humanize: prefs.humanize, seed: seedOf(track), barBeats: mbNow(), shape: prefs.shape, strength: prefs.strength });
     const byId = new Map(notes.map(n => [n.id, n]));
     const ops = plan.map(p => { const n = byId.get(p.id); return `vel ${n.ch} ${n.x} ${n.y} ${r4(p.vel / 127)}`; });
     if (ops.length) { SV.send(ops); SV.state.editedTracks && SV.state.editedTracks.add(track); }
@@ -580,19 +687,22 @@
   });
 
   // Click targets: hairpins are thin lines, so each of ours gets a transparent box to click.
+  // All boxes are measured before any rect goes in (an insert between two measurements forces a layout each time).
   SV.hooks.afterRender.push(() => {
-    document.querySelectorAll('#paper g.hairpin[id^="dh"], #paper g.dynam[id^="dm_"]').forEach(g => {
+    const items = [...document.querySelectorAll('#paper g.hairpin[id^="dh"], #paper g.dynam[id^="dm_"]')].map(g => {
+      let b = null;
+      if (!g.querySelector('.svd-hit')) try { b = g.getBBox(); } catch (e) { /* not laid out */ }
+      return { g, b };
+    });
+    items.forEach(({ g, b }) => {
       g.classList.add('svd-item');
-      if (g.querySelector('.svd-hit')) return;
-      try {
-        const b = g.getBBox();
-        const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-        const pad = Math.max(60, b.height);
-        r.setAttribute('class', 'svd-hit');
-        r.setAttribute('x', b.x - 20); r.setAttribute('y', b.y - pad / 2);
-        r.setAttribute('width', b.width + 40); r.setAttribute('height', b.height + pad);
-        g.insertBefore(r, g.firstChild);
-      } catch (e) { /* not laid out */ }
+      if (!b) return;
+      const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      const pad = Math.max(60, b.height);
+      r.setAttribute('class', 'svd-hit');
+      r.setAttribute('x', b.x - 20); r.setAttribute('y', b.y - pad / 2);
+      r.setAttribute('width', b.width + 40); r.setAttribute('height', b.height + pad);
+      g.insertBefore(r, g.firstChild);
     });
   });
   const itemIdOf = el => { const g = el && el.closest && el.closest('#paper g.svd-item'); return g ? g.id.replace(/^(dh2_|dh_|dm_)/, '') : null; };
@@ -764,17 +874,21 @@
       + `<label class="svd-row">Hairpins <select id="svdShape">${SHAPES.map(s => `<option value="${s.id}" ${s.id === prefs.shape ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>`
       + `<div class="svd-hint" id="svdShapeBlurb">${esc((SHAPES.find(s => s.id === prefs.shape) || SHAPES[0]).blurb)}. Click a hairpin in the score to give it its own shape.</div>`
       + `<label class="svd-row">Shape strength <input type="range" id="svdStrength" min="0" max="1" step="0.05" value="${prefs.strength}"></label>`
-      + `<label class="svd-check"><input type="checkbox" id="svdVar" ${prefs.variation ? 'checked' : ''}> Human variation (a slow, seeded wobble; the second slider trails a little)</label>`
+      + `<label class="svd-check"><input type="checkbox" id="svdVar" ${prefs.variation ? 'checked' : ''}> Human variation in the controls (a gentle seeded drift inside each dynamic; the second slider trails a little)</label>`
       + `<label class="svd-row">Variation <input type="range" id="svdAmount" min="0" max="1" step="0.05" value="${prefs.amount}" ${prefs.variation ? '' : 'disabled'}></label>`
       + '<div class="svd-h">Velocities</div>'
-      + `<label class="svd-check"><input type="checkbox" id="svdVelMarks" ${prefs.velMarks ? 'checked' : ''}> A dynamic mark sets the velocities of the notes it governs</label>`
+      + '<div class="svd-hint">Velocities change at once in Bitwig (Ctrl+Z undoes). The library\'s Dynamics / Expression controls change only with <b>Render</b> (or live with Preview).</div>'
+      + `<label class="svd-check"><input type="checkbox" id="svdVelMarks" ${prefs.velMarks ? 'checked' : ''}> Dynamics set the velocities of the notes they govern</label>`
       + `<label class="svd-check"><input type="checkbox" id="svdVelHairpins" ${prefs.velHairpins ? 'checked' : ''}> Hairpins shape velocities too</label>`
+      + `<label class="svd-check"><input type="checkbox" id="svdVelNew" ${prefs.velNew ? 'checked' : ''}> New and moved notes follow the dynamic</label>`
+      + `<label class="svd-row">Humanize <span><input type="range" id="svdHuman" min="0" max="12" step="1" value="${prefs.humanize}"> <b id="svdHumanVal">±${prefs.humanize}</b></span></label>`
+      + '<div class="svd-actions"><button class="btn" id="svdApplyVel" title="Set the velocities of every note under a dynamic in the live clip again">Apply to all marked notes</button></div>'
       + `<label class="svd-row">Hairpin keys <select id="svdKeys"><option value="sibelius" ${prefs.keys !== 'alt' ? 'selected' : ''}>H / Shift+H with notes selected (Sibelius)</option><option value="alt" ${prefs.keys === 'alt' ? 'selected' : ''}>Alt+H / Alt+Shift+H (H stays harmony)</option></select></label>`
       + '<div class="svd-foot"><div class="svd-actions"><button class="btn" id="svdStop" disabled>Stop</button><button class="btn" id="svdPreview">Preview</button>'
       + '<button class="btn svd-render" id="svdRender">Render</button><button class="btn" id="svdClose">Close</button></div>'
       + '<div class="svd-progress" id="svdProg" hidden><div></div></div><div class="svd-status" id="svdStatus"></div></div>';
     wirePal(panel, () => q('svdType'));
-    const why = !cb ? 'Where is the clip in the arrangement? Use Score mode or ⟳ Read arrangement first.' : playing ? 'Stop playback first.' : '';
+    const why = !cb ? 'Where is the clip in the arrangement? Use Score mode or ⟳ Read project first.' : playing ? 'Stop playback first.' : '';
     if (why) report(why, true);
     if (run) setRunning(true);
   }
@@ -815,7 +929,7 @@
   async function perform(mode, opts = {}) {
     if (run) return report('Already running — Stop first', true);
     if (SV.state.playing) return report('Stop playback first: ' + (mode === 'render' ? 'Render' : 'Preview') + ' starts the transport itself.', true);
-    if (!liveOrigin()) return report('Where is the clip in the arrangement? Use Score mode or ⟳ Read arrangement first.', true);
+    if (!liveOrigin()) return report('Where is the clip in the arrangement? Use Score mode or ⟳ Read project first.', true);
     await LP.ready;
     await fetchCurve();
     const mb = mbNow();
@@ -893,7 +1007,14 @@
     else if (id === 'svdPreview') perform('preview');
     else if (id === 'svdRender') perform('render');
     else if (id === 'svdStop') stop();
+    else if (id === 'svdApplyVel') {
+      const d = SV.state.liveData, o = liveOrigin();
+      if (!d || !d.exists || !o) { SV.flash('Select a clip in the Arranger first'); return; }
+      const n = applyVelocities(d.track, o, null, null);
+      SV.flash(n ? `${d.track}: ${n} velocities set from the dynamics` : 'Velocities already match the dynamics');
+    }
   });
+  panel.addEventListener('input', e => { if (e.target.id === 'svdHuman') q('svdHumanVal').textContent = '±' + e.target.value; });
   panel.addEventListener('change', e => {
     const t = e.target;
     if (t.dataset.track) { if (t.checked) unchecked.delete(t.dataset.track); else unchecked.add(t.dataset.track); return; }
@@ -908,6 +1029,8 @@
       case 'svdAmount': prefs.amount = +t.value; break;
       case 'svdVelMarks': prefs.velMarks = t.checked; break;
       case 'svdVelHairpins': prefs.velHairpins = t.checked; break;
+      case 'svdVelNew': prefs.velNew = t.checked; break;
+      case 'svdHuman': prefs.humanize = +t.value; break;
       case 'svdKeys': prefs.keys = t.value; SV.flash('Hairpin keys change after a reload (F5)'); break;
       default: return;
     }
@@ -993,7 +1116,7 @@
 
   SV.dynamics = Object.assign({}, pure, {
     prefs, savePrefs, doc: () => doc, setDoc(d) { doc = normalizeDoc(d); saveDoc(); SV.requestRender(); refreshPanel(); },
-    reload: loadDoc, enter, liveOrigin, selectionSpan, profileFor, perform, stop, open, close, curveStatus: () => curveStatus,
+    reload: loadDoc, enter, liveOrigin, reanchorLive, applyVelocities, selectionSpan, profileFor, perform, stop, open, close, curveStatus: () => curveStatus,
     openEntryPop, closePop,
   });
 })(typeof window !== 'undefined' ? window : globalThis);

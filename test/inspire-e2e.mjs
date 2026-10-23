@@ -8,7 +8,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 await withPage({ port: PORT, width: 1400, height: 800 }, async ({ page, srv, errors }) => {
   const BAR = 96; // live-violin1 fixture: 4/4, 24 steps per beat
   const inBars = (from, to) => srv.state.data.notes.filter(n => n.x >= from * BAR && n.x < to * BAR);
-  const synced = () => page.waitForFunction(v => SV.state.liveData && SV.state.liveData.v === v && SV.state.render, { timeout: 5000 }, srv.state.v);
+  const synced = () => page.waitForFunction(v => SV.state.liveData && SV.state.liveData.v >= v && SV.state.render, { timeout: 5000 }, srv.state.v);
   const waitEdits = async before => { for (let i = 0; i < 100 && srv.edits.length === before; i++) await sleep(20); await synced(); await sleep(150); };
   await page.evaluate(() => localStorage.removeItem('scoreview.inspire.prefs'));
   await synced();

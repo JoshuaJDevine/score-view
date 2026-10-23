@@ -42,8 +42,7 @@ export const SEL = {
   // Segmented controls and selects in the main toolbar.
   modeSeg: '#modeSeg',
   mode: name => `#modeSeg button[data-mode="${name}"]`,
-  rangeSeg: '#rangeSeg',
-  range: name => `#rangeSeg button[data-range="${name}"]`,
+
   alignNav: '#alignNav',
   alignStep: dir => `#alignNav button[data-dir="${dir}"]`,
   keySel: '#keySel',
@@ -60,7 +59,7 @@ export const SEL = {
 
 /** Drop-down menus: the button that opens each and the panel it shows (created on open for some). */
 export const MENUS = {
-  tracks: { button: '#trackBtn', panel: '#trackPanel' },
+
   view: { button: '#svViewBtn', panel: '#svViewPanel' },
   file: { button: '#svFileBtn', panel: '#svFilePanel' },
   read: { button: '#svlReadMore', panel: '#svlReadPop' },
@@ -77,7 +76,6 @@ export const MENUS = {
 /** Single-click toolbar buttons and toggles. */
 export const TOOLS = {
   freshScore: '#freshBtn',
-  open: '#openBtn',
   pin: '#pinBtn',
   import: '#svImportBtn',
   print: '#svpPrintBtn',
@@ -99,7 +97,6 @@ export const TOOLS = {
   hideEmpty: '#condense',
   hideKeyswitches: '#hideKs',
   audition: '#audition',
-  exactLengths: '#svarExact',
   palette: '#svPaletteBtn',
   messages: '#svToastBtn',
   shortcuts: '#helpToggle',
@@ -135,7 +132,7 @@ export async function clickTool(page, name) {
   await clickIn(page, lookup(TOOLS, 'tool', name));
 }
 
-/** Picks the bar range: 'clip' (Clip bars) or 'all' (Whole song). */
+/** The engine's bar range for the next renders: 'clip' (the selected clip's bars) or 'all' (the whole song). */
 export async function setRange(page, name) {
-  await page.click(SEL.range(name));
+  await page.evaluate(n => { SV.state.range = n; SV.render(); }, name);
 }

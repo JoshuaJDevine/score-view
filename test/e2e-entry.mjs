@@ -43,11 +43,11 @@ await withPage({ port: PORT }, async ({ page, srv, errors }) => {
   await settle();
   assert(has(108, 79, 1) && !has(120, 79), 'tie extends: ' + notes());
 
-  // 3. Selection follows the entered note: ArrowUp (core) raises it.
-  await press('ArrowUp');
+  // 3. Selection follows the entered note: Alt+ArrowUp (core, Score View keys: semitone) raises it.
+  await page.keyboard.down('Alt'); await press('ArrowUp'); await page.keyboard.up('Alt');
   await settle();
-  assert(has(108, 80, 1), 'arrow up on entered note: ' + notes());
-  await press('ArrowDown');
+  assert(has(108, 80, 1), 'Alt+arrow up on entered note: ' + notes());
+  await page.keyboard.down('Alt'); await press('ArrowDown'); await page.keyboard.up('Alt');
   await settle();
 
   // 4. Triplets (Ctrl+3): 8th triplets are 8 steps.

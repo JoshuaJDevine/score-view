@@ -35,11 +35,22 @@
   const clipKey = d => [d.track, d.length, d.playStart, d.loopStart, d.loopLength].join('|');
   function alignLive() {
     const d = state.liveData;
-    if (!d || !d.exists || !state.base) { state.align = null; return; }
+    if (!d || !d.exists) { state.align = null; return; }
     const key = clipKey(d);
     const cur = state.align && state.align.key === key ? state.align : null;
-    const part = state.base.parts.find(p => p.name === d.track);
-    if (!part) { if (!cur || cur.how !== 'playhead') state.align = null; return; }
+    // Last resort: the play start marker, which Bitwig moves to a clip you select (how 'guess': anything better wins).
+    const g = state.playStartGuess;
+    const guess = g && g.key === key && g.beat != null ? { track: d.track, key, offset: g.beat, how: 'guess', cands: [] } : null;
+    // After a Read, a read clip of this track starting at the play start marker is where the selected clip is: note
+    // matching against the read can land on old notes elsewhere when the clip changed since (live 2026-10-18: a
+    // quantized Violin 2 matched at bar 6 instead of its clip at bar 1).
+    const readHere = guess && state.crawl && (state.crawl.result || []).some(c => c.track === d.track && Math.abs(c.start - guess.offset) < 1e-6);
+    if (readHere && (!cur || cur.how === 'match' || cur.how === 'guess')) {
+      if (!cur || cur.how !== 'guess' || cur.offset !== guess.offset) setAlign(guess);
+      return;
+    }
+    const part = state.base && state.base.parts.find(p => p.name === d.track);
+    if (!part) { if (!cur || (cur.how !== 'playhead' && cur.how !== 'guess')) state.align = guess; return; }
     const notes = liveNotes();
     if (!notes.length) return;
     const found = ClipAlign.findPlacements(notes, part.notes, { length: visLength(d), playPos: state.playPos });
@@ -47,10 +58,50 @@
     if (cur) {
       const fit = ClipAlign.openingScore(notes, part.notes, cur.offset);
       const keep = cur.how === 'match' ? !found.best || cands.includes(cur.offset) || fit >= found.best.open - 0.1
+        : cur.how === 'guess' ? !found.best
         : !found.best || found.best.open < 0.8 || fit >= 0.3; // playhead/manual: unless another clip of this size fits elsewhere
       if (keep) { cur.cands = cands; return; }
     }
-    setAlign(found.best ? { track: d.track, key, offset: found.best.offset, how: 'match', cands } : null);
+    setAlign(found.best ? { track: d.track, key, offset: found.best.offset, how: 'match', cands } : guess);
+  }
+
+  // Remembers where the play start marker is once another clip was selected (Bitwig moves it to the clip a little
+  // after reporting the clip's notes): the placement of last resort for Score mode. The extension reports it with
+  // the data (selPlayStart), trusted from settled snapshots only; a later settled snapshot within GUESS_WINDOW_MS of
+  // the switch may still correct it (the marker came late), after that a moved marker no longer moves the clip.
+  // An extension without the field: fetched from /api/transport 400 ms after the switch.
+  const GUESS_WINDOW_MS = 1500;
+  let guessTimer = 0;
+  function refreshPlayStartGuess(d) {
+    const key = clipKey(d);
+    if ('selPlayStart' in d) {
+      let g = state.playStartGuess;
+      if (!g || g.key !== key) { clearTimeout(guessTimer); g = state.playStartGuess = { key, beat: null, since: Date.now() }; }
+      if (!d.settled || d.selPlayStart == null || state.playing || g.beat === d.selPlayStart) return;
+      if (g.beat != null && Date.now() - g.since > GUESS_WINDOW_MS) return;
+      g.beat = d.selPlayStart;
+      if (state.mode === 'score' && (!state.align || state.align.how === 'guess')) C.requestRender();
+      return;
+    }
+    if (state.playStartGuess && state.playStartGuess.key === key) return;
+    state.playStartGuess = { key, beat: null };
+    clearTimeout(guessTimer);
+    guessTimer = setTimeout(() => {
+      fetch('/api/transport', { cache: 'no-store' }).then(r => r.json()).then(t => {
+        const g = state.playStartGuess;
+        if (!g || g.key !== key || t.playing || (t.clip && !t.clip.exists)) return;
+        g.beat = t.playStart;
+        if (state.mode === 'score' && (!state.align || state.align.how === 'guess')) C.requestRender();
+      }).catch(() => {});
+    }, 400);
+  }
+
+  // A clip position measured from the playhead (pos - step, ~0.1 beat of jitter): the nearest beat when within
+  // PLAYHEAD_SLACK of it, else the nearest 16th (a clip that really starts off the beat).
+  const PLAYHEAD_SLACK = 0.3;
+  function playheadOffset(raw) {
+    const beat = Math.round(raw);
+    return Math.abs(raw - beat) <= PLAYHEAD_SLACK ? beat : Math.round(raw * 4) / 4;
   }
 
   // Changes the placement; a snapshot recorded for this clip at a place it turned out not to be is dropped.
@@ -74,13 +125,25 @@
     C.render();
   }
 
+  // Is the live data settled? On a clip switch Bitwig swaps the notes one by one and reports the new track (and moves
+  // the play start marker) a moment later, so data taken meanwhile can put one clip's notes on another's staff.
+  // The extension says so itself (d.settled, LiveSync.java: 100 ms of quiet, 200 ms after a clip switch); for one
+  // that does not send the field the page waits SETTLE_MS of quiet (core/net.js runs hooks.liveSettled then).
+  const SETTLE_MS = 200;
+  function liveSettledNow() {
+    const d = state.liveData;
+    if (!d) return false;
+    if (typeof d.settled === 'boolean') return d.settled;
+    const now = Date.now();
+    return now - state.trackSince >= SETTLE_MS && now - (state.liveChangedAt || 0) >= SETTLE_MS;
+  }
+
   // Keeps a clip's current notes in the score after you leave it — only for clips edited from Score View, and only
-  // once the selection has settled (on a clip switch Bitwig can report the new notes before the new track name;
-  // a snapshot taken then would paint one track's notes on another's staff).
+  // from settled data (a snapshot taken mid-switch would paint one track's notes on another's staff).
   function rememberOverlay() {
     const d = state.liveData, a = state.align;
     if (!d || !d.exists || !a || a.track !== d.track) return;
-    if (!state.editedTracks.has(d.track) || Date.now() - state.trackSince < 500) return;
+    if (!state.editedTracks.has(d.track) || !liveSettledNow()) return;
     state.overlays.set(d.track + '@' + a.offset, {
       track: d.track, key: a.key, offset: a.offset, length: visLength(d),
       notes: liveNotes().map(n => ({ ...n, start: n.start + a.offset })),
@@ -90,11 +153,15 @@
   // Bitwig only reports one selected track, so multi-track views are built from pins.
   function visibleTrackNames() {
     const all = scoreTrackNames();
-    if (state.trackMode === 'all') return new Set(all);
-    const names = new Set(all.filter(n => state.pinned.has(n)));
-    const cur = currentTrack();
-    if (cur) names.add(cur);
-    const shown = names.size ? names : new Set(all);
+    let shown;
+    if (state.trackMode === 'all') shown = new Set(all);
+    else {
+      const names = new Set(all.filter(n => state.pinned.has(n)));
+      const cur = currentTrack();
+      if (cur) names.add(cur);
+      shown = names.size ? names : new Set(all);
+    }
+    // hooks may narrow it (features/sections.js: a section view in Score view)
     for (const fn of hooks.visibleTracks) {
       try { const r = fn(shown, all); if (r instanceof Set) return r; } catch (err) { console.error('hook visibleTracks', err); }
     }
@@ -108,11 +175,9 @@
 
   function togglePin(name) {
     if (!name) return;
-    if (state.pinned.has(name)) state.pinned.delete(name); else state.pinned.add(name);
-    store.set('pinned', [...state.pinned]);
-    C.flash((state.pinned.has(name) ? 'Pinned ' : 'Unpinned ') + name);
-    C.renderTrackList();
-    C.render();
+    const on = !state.pinned.has(name);
+    C.setPinned(name, on);
+    C.flash((on ? 'Pinned ' : 'Unpinned ') + name + (on && state.view === 'clip' ? ': it stays in Clip view next to the clip you select' : ''));
   }
 
   /** Bitwig's instrument tracks (with their group) — the staves when no score is loaded. */
@@ -177,14 +242,35 @@
                    keyswitches: keyswitches(notes) });
     });
     if (!parts.length) return null;
+    // Hide unused instruments (View ▾): parts with no notes in the shown bars go, except the live one and pinned ones.
+    const hideUnused = () => $('hideUnused') && $('hideUnused').checked && !state.showAllStaves && !(state.base && state.base.fresh);
+    // used: notes in the shown bars, or a clip there (an empty clip is somewhere to paste or write into)
+    const crawlClips = (state.crawl && state.crawl.result) || [];
+    const clipEndOf = (c, i, all) => { const fn = window.SV.arrangement && window.SV.arrangement.clipEnd; const next = all.filter(o => o.track === c.track && o.start > c.start).sort((a, b) => a.start - b.start)[0];
+      return fn ? fn(c, next) : c.start + (c.playStop - c.playStart); };
+    const hasClipIn = (name, from, to) => crawlClips.some((c, i, all) => c.track === name && c.start < to - 1e-6 && clipEndOf(c, i, all) > from + 1e-6);
+    let shownFrom = 0, shownTo = Infinity;
+    const used = p => p.name.endsWith(' ✎') || state.pinned.has(p.name) || p.notes.some(n => n.pitch >= ksMin()) || hasClipIn(p.name, shownFrom, shownTo);
 
     const ts = state.base ? state.base.timeSig : { num: d.num || 4, den: d.den || 4 };
     const mb = ts.num * 4 / ts.den;
+    // Whole song: bar 1 to the end of the last clip, the live clip (and remembered edited clips) included.
     let measureOffset = 0, lengthBeats = state.base ? state.base.lengthBeats : (d ? visLength(d) : 0);
+    if (d && d.exists && a) lengthBeats = Math.max(lengthBeats, a.offset + visLength(d));
+    state.overlays.forEach(o => { lengthBeats = Math.max(lengthBeats, o.offset + o.length); });
     if (state.range === 'clip' && d && d.exists && (a || !state.base)) {
       const off = a ? a.offset : 0;
-      measureOffset = Math.floor(off / mb);
-      const endBeat = Math.ceil((off + visLength(d)) / mb - 1e-6) * mb;
+      // The selected clip's bars, widened to the clips on the shown staves that overlap it (Read): from the earliest
+      // of them to the latest, so a pinned track's clip that starts earlier or ends later is not cut.
+      let from = off, to = off + visLength(d);
+      const shownNames = new Set(parts.map(p => p.name.replace(/ ✎$/, '')));
+      crawlClips.forEach((c, i, all) => {
+        if (!shownNames.has(c.track)) return;
+        const end = clipEndOf(c, i, all);
+        if (c.start < to - 1e-6 && end > from + 1e-6) { from = Math.min(from, c.start); to = Math.max(to, end); }
+      });
+      measureOffset = Math.floor(Math.max(0, from) / mb);
+      const endBeat = Math.ceil(to / mb - 1e-6) * mb;
       const startBeat = measureOffset * mb;
       parts.forEach(p => {
         p.notes = p.notes.filter(n => n.start >= startBeat - 1e-6 && n.start < endBeat - 1e-6)
@@ -192,7 +278,9 @@
         p.keyswitches = p.keyswitches.filter(n => n.start < endBeat - 1e-6).map(n => ({ ...n, start: n.start - startBeat }));
       });
       lengthBeats = endBeat - startBeat;
+      shownFrom = startBeat; shownTo = endBeat;
     }
+    if (hideUnused() && parts.some(used)) for (let i = parts.length - 1; i >= 0; i--) if (!used(parts[i])) parts.splice(i, 1);
     return { title: state.base ? state.base.title : '', timeSig: ts, keyFifths: key, lengthBeats, measureOffset, parts };
   }
 
@@ -206,8 +294,9 @@
   }
 
   Object.assign(C, {
-    liveId, ksMin, clipStart, visLength, liveNotes, contentOrigin, clipKey, alignLive, setAlign, cycleAlign,
-    rememberOverlay, visibleTrackNames, currentTrack, togglePin, bitwigTracks, scoreTrackNames, currentScore,
+    liveId, ksMin, clipStart, visLength, liveNotes, contentOrigin, clipKey, alignLive, setAlign, cycleAlign, playheadOffset, PLAYHEAD_SLACK,
+    refreshPlayStartGuess,
+    rememberOverlay, SETTLE_MS, liveSettledNow, visibleTrackNames, currentTrack, togglePin, bitwigTracks, scoreTrackNames, currentScore,
     transformedScore,
   });
 })();

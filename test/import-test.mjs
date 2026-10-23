@@ -52,7 +52,9 @@ console.log('MIDI parser');
 // ------------------------------------------------------------------ MusicXML round trip
 
 const key = n => `${+n.start.toFixed(4)}|${n.pitch}|${+n.dur.toFixed(4)}`;
+// Exact round trip: the score-intent reading (opts.interpret) is off, the notes must come back where they were.
 function exportXml(score, buildOptions) {
+  buildOptions = { interpret: false, ...buildOptions };
   const built = ScoreBuilder.buildMEI(score, buildOptions);
   const render = { ...built, score };
   const prep = MX.prepareExport(render, { ScoreBuilder, buildOptions, singleStaff: true, writtenPitch: true });

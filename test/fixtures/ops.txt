@@ -19,8 +19,9 @@ loop 2 2 extension -
 loopOff 0 0 extension -
 solo 2 2 extension -
 mute 2 2 extension -
+deviceOn 2 2 extension -
 metronome 1 1 extension -
-crawl 0 1 crawler -
+crawl 0 * crawler -
 crawlCancel 0 0 crawler -
 goto 3 * navigator -
 gotoStay 3 * navigator -
@@ -35,6 +36,7 @@ curveStop 0 0 curve -
 act 1 * extension dev
 clipNext 0 0 extension dev
 clipPrev 0 0 extension dev
+clipStepProbe 0 1 extension dev
 selectTrack 1 1 extension dev
 moveTrackAfter 2 2 extension dev
 moveTrackBefore 2 2 extension dev

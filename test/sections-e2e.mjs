@@ -44,6 +44,17 @@ await withPage({ port, fixture, mode: 'score', height: 1100 }, async ({ page, sr
   // The playhead while playing beats any match or manual choice, and stays after stopping.
   srv.state.play = { playing: true, step: 24 * 8, pos: 96 + 8, tempo: 120 };
   await page.waitForFunction(() => window.SV.state.align && window.SV.state.align.how === 'playhead', { timeout: 5000 });
+  // pos and step are observed separately in Bitwig: readings ~0.1 beat apart must keep the clip on the beat (a clip
+  // drawn 1/8 beat off engraves as tuplets) and must not re-render it.
+  // (the render that moved the clip to the playhead may still be engraving chunks in the workers: let it finish first)
+  await page.evaluate(() => window.SV.rendered());
+  await page.evaluate(() => { window.__renders = 0; window.SV.hooks.afterRender.push(() => window.__renders++); });
+  for (const jitter of [0.11, -0.09, 0.2, -0.17]) {
+    srv.state.play = { playing: true, step: 24 * 8, pos: 96 + 8 + jitter, tempo: 120 };
+    await new Promise(r => setTimeout(r, 150));
+    assert.equal(await page.evaluate(() => window.SV.state.align.offset), 96, 'playhead placement snaps to the beat');
+  }
+  assert.equal(await page.evaluate(() => window.__renders), 0, 'jitter does not re-render');
   srv.state.play = { playing: false, step: -1, pos: 96 + 8, tempo: 120 };
   await new Promise(r => setTimeout(r, 300));
   await page.evaluate(() => window.SV.render());
@@ -53,6 +64,11 @@ await withPage({ port, fixture, mode: 'score', height: 1100 }, async ({ page, sr
   assert.match(await page.$eval('#title', e => e.textContent), /Bass @ bar 1 \(1 of 4\)/);
 
   // Brass + the live clip's track (Bass), in score order: brass above strings.
+  await page.evaluate(() => { SV.state.range = 'clip'; }); // the selected clip's bars (as in Clip view with pins)
+  v = await view('Brass');
+  // Hide unused instruments (default): horns and bass trombones play nothing in these bars
+  assert.deepEqual(v.parts, ['Tumpet', 'Tumpets a3', 'Tn Trombones a3', 'Tuba', 'Bass ✎']);
+  await page.evaluate(() => { const b = document.getElementById('hideUnused'); b.checked = false; b.dispatchEvent(new Event('change')); });
   v = await view('Brass');
   assert.deepEqual(v.parts, ['Horns a4', 'Tumpet', 'Tumpets a3', 'Tn Trombones a3', 'Bs Trombones a2', 'Tuba', 'Bass ✎']);
   assert.deepEqual(v.groups, ['Brass', 'Strings']);

@@ -493,13 +493,20 @@
     .svi-row { display: flex; justify-content: space-between; gap: 10px; padding: 2px 4px; cursor: pointer; border-radius: 3px; }
     .svi-row:hover { background: var(--bar2, #2d2d2d); }
     .svi-row .inst { color: var(--accent, #ff7a1a); }
+    .svi-panel .svi-show { display: flex; align-items: center; gap: 8px; margin: 2px 0 8px; font-size: 12px; color: var(--dim, #888); }
+    .svi-panel .svi-show .seg button { font-size: 12px; padding: 2px 8px; }
+    .svi-panel .svi-show .seg button.on { background: var(--accent, #ff7a1a); color: #111; }
+    .svi-panel .svi-row { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; }
+    .svi-panel .svi-pin { cursor: pointer; white-space: nowrap; }
+    .svi-panel .svi-cur { color: var(--accent, #ff7a1a); font-size: 11px; font-style: normal; }
+    .svi-panel .svi-clear { color: var(--accent, #ff7a1a); cursor: pointer; margin-left: 6px; }
     .svi-row .inst.auto { color: var(--dim, #888); }
     #paper g.label, #paper g.labelAbbr { cursor: pointer; }
     #paper g.label:hover text, #paper g.labelAbbr:hover text { fill: var(--accent, #ff7a1a); }
   `);
 
   const bar = SV.addToolbar(
-    '<button class="btn" id="svInstrBtn" title="Instrument for each shown track">Instruments ▾</button>' +
+    '<button class="btn" id="svInstrBtn" title="Which tracks you see (📌 pin) and the instrument of each">Instruments ▾</button>' +
     '<label title="Label staves with instrument names instead of Bitwig track names"><input type="checkbox" id="sviNames"> Instrument names</label>' +
     '<label title="Show transposing instruments at written pitch (off = concert pitch)"><input type="checkbox" id="sviTransposed"> Transposed score</label>' +
     '<label title="Red: outside the instrument\'s range. Orange: outside the comfortable range"><input type="checkbox" id="sviRanges"> Ranges</label>', { cluster: 'score', order: 10 });
@@ -569,23 +576,44 @@
     input.focus();
   }
 
-  // Toolbar panel: every shown track with its instrument.
+  // Toolbar panel: what you see and with which instrument. Every track of the project / read: 📌 pins it (Clip view
+  // shows pinned tracks next to the selected clip; Score view shows all, or only the pinned ones), and its instrument
+  // (click to choose).
+  function drawPanel(at) {
+    const core = SV.core || {}, S = SV.state;
+    const names = core.scoreTrackNames ? core.scoreTrackNames() : [];
+    const cur = core.currentTrack ? core.currentTrack() : null;
+    const r = S.render;
+    const partOf = n => (r && r.score.parts.find(p => cleanName(p.name) === n)) || { name: n, notes: [] };
+    const seg = (v, label) => `<button data-show="${v}" class="${(S.scoreShow || 'all') === v ? 'on' : ''}">${label}</button>`;
+    pop.innerHTML = '<h4>Instruments</h4>'
+      + `<div class="svi-show">Score view shows <span class="seg">${seg('all', 'All instruments')}${seg('pinned', 'Pinned only')}</span></div>`
+      + '<div class="svi-list">' + (names.length ? names.map(n => {
+        const info = forPart(partOf(n));
+        return `<div class="svi-row" data-part="${escapeHtml(n)}"><label class="svi-pin" title="Pin: shown in Clip view next to the selected clip, and in Score view when it shows pinned only">`
+          + `<input type="checkbox" data-pin="${escapeHtml(n)}" ${S.pinned.has(n) ? 'checked' : ''}> 📌</label>`
+          + `<span>${escapeHtml(n)}${n === cur ? ' <i class="svi-cur">✎ selected</i>' : ''}</span>`
+          + `<span class="inst ${info.override ? '' : 'auto'}" title="Choose the instrument">${escapeHtml(info.inst.name)}</span></div>`;
+      }).join('') : '<div class="fam">No tracks yet: select a clip in Bitwig, or ⟳ Read project</div>')
+      + '</div><div class="fam" style="margin-top:6px">📌 = pinned (P pins the selected clip\'s track). Click an instrument (or a staff name in the score) to change it. <a class="svi-clear">Clear pins</a></div>';
+    if (at) placePop(at.left, at.bottom + 4);
+  }
   q('svInstrBtn').addEventListener('click', e => {
     if (pop) { closePop(); return; }
-    const r = SV.state.render;
-    const parts = r ? r.score.parts : [];
     pop = document.createElement('div');
-    pop.className = 'svi-pop';
-    pop.innerHTML = '<h4>Instruments of shown tracks</h4><div class="svi-list">' + (parts.length ? parts.map(p => {
-      const info = forPart(p);
-      return `<div class="svi-row" data-part="${escapeHtml(p.name)}"><span>${escapeHtml(cleanName(p.name))}</span>` +
-        `<span class="inst ${info.override ? '' : 'auto'}">${escapeHtml(info.inst.name)}</span></div>`;
-    }).join('') : '<div class="fam">No tracks shown</div>') +
-      '</div><div class="fam" style="margin-top:6px">Click a track (or a staff name in the score) to choose its instrument.</div>';
+    pop.className = 'svi-pop svi-panel';
     document.body.appendChild(pop);
     const br = e.target.getBoundingClientRect();
-    placePop(br.left, br.bottom + 4);
+    drawPanel(br);
+    pop.addEventListener('change', ev => {
+      const n = ev.target.dataset && ev.target.dataset.pin;
+      if (n != null && SV.core.setPinned) { SV.core.setPinned(n, ev.target.checked); }
+    });
     pop.addEventListener('click', ev => {
+      const show = ev.target.closest('[data-show]');
+      if (show) { SV.core.setScoreShow(show.dataset.show); drawPanel(); return; }
+      if (ev.target.closest('.svi-clear')) { SV.core.clearPins(); drawPanel(); return; }
+      if (ev.target.closest('.svi-pin')) return;
       const row = ev.target.closest('.svi-row');
       if (!row) return;
       const rr = row.getBoundingClientRect();
@@ -613,11 +641,13 @@
     return staff ? staff.part : null;
   }
 
-  SV.hooks.afterRender.push(render => {
-    document.querySelectorAll('#paper g.label, #paper g.labelAbbr').forEach(el => {
+  SV.hooks.afterRender.push(() => {
+    // Engravings kept from an earlier render (unchanged chunks of a big score) already have their listeners.
+    document.querySelectorAll('#paper g.label:not(.svi-bound), #paper g.labelAbbr:not(.svi-bound)').forEach(el => {
+      el.classList.add('svi-bound');
       el.addEventListener('click', e => {
         e.stopPropagation();
-        const name = partForLabel(el, render);
+        const name = partForLabel(el, SV.state.render);
         if (name) openPicker(name, e.clientX + 6, e.clientY + 6);
       });
       el.addEventListener('mousedown', e => e.stopPropagation());

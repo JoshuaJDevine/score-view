@@ -1,66 +1,43 @@
-// Score View page core: the Tracks ▾ picker (pins, groups, all / pinned) and the Pin button.
+// Score View page core: pins and the Pin toggle. Pinned tracks stay in Clip view next to the selected clip, and in
+// Score view when it shows "Pinned only" (state.scoreShow). The list itself lives in Instruments ▾
+// (features/instruments.js), which calls setPinned / setScoreShow.
 (function () {
   'use strict';
   const C = window.SV.core;
-  const { $, state, store, escapeHtml } = C;
+  const { $, state, store } = C;
 
+  /** The Pin toggle: lit when the selected clip's track is pinned. (Name kept: modules call SV.renderTrackList.) */
   function renderTrackList() {
-    const list = $('trackList');
-    const names = C.scoreTrackNames();
-    const shown = C.visibleTrackNames();
-    const groups = new Map();
-    names.forEach(n => {
-      const p = state.base && state.base.parts.find(x => x.name === n);
-      const g = (p && p.group) || '';
-      if (!groups.has(g)) groups.set(g, []);
-      groups.get(g).push(n);
-    });
-    const all = state.trackMode === 'all', cur = C.currentTrack();
-    let html = '';
-    groups.forEach((ns, g) => {
-      if (g) html += `<div class="tgroup"><a data-group="${escapeHtml(g)}" title="Pin/unpin the whole group">${escapeHtml(g)}</a></div>`;
-      ns.forEach(n => {
-        html += `<label><input type="checkbox" data-track="${escapeHtml(n)}" ${state.pinned.has(n) ? 'checked' : ''} ${all ? 'disabled' : ''}> ${escapeHtml(n)}` +
-          (n === cur ? ' <span class="cur">selected</span>' : '') + '</label>';
-      });
-    });
-    list.innerHTML = html || '<div class="tgroup">Load a .dawproject to list tracks</div>';
-    document.querySelectorAll('input[name=trackMode]').forEach(r => { r.checked = r.value === state.trackMode; });
-    $('trackBtn').textContent = 'Tracks: ' + (all ? 'all' : shown.size + ' shown') + ' ▾';
-    $('pinBtn').textContent = cur ? (state.pinned.has(cur) ? 'Unpin ' : 'Pin ') + cur : 'Pin';
-    $('pinBtn').disabled = !cur || all;
+    const cur = C.currentTrack(), on = !!cur && state.pinned.has(cur);
+    const btn = $('pinBtn');
+    btn.classList.toggle('on', on);
+    btn.disabled = !cur;
+    btn.textContent = on ? '📌 Pinned' : '📌 Pin';
+    btn.title = cur ? (on ? `Unpin ${cur} (P)` : `Pin ${cur}: it stays in Clip view next to whatever clip you select (P)`) : 'Select a clip in Bitwig to pin its track';
   }
 
-  $('trackBtn').addEventListener('click', e => { $('trackPanel').classList.toggle('hidden'); e.stopPropagation(); });
-  document.addEventListener('click', e => { if (!$('trackPanel').contains(e.target)) $('trackPanel').classList.add('hidden'); });
-  $('trackPanel').addEventListener('change', e => {
-    if (e.target.name === 'trackMode') {
-      state.trackMode = e.target.value;
-      store.set('trackMode2', state.trackMode);
-    } else if (e.target.dataset.track) {
-      if (e.target.checked) state.pinned.add(e.target.dataset.track); else state.pinned.delete(e.target.dataset.track);
-      store.set('pinned', [...state.pinned]);
-    }
-    renderTrackList();
-    C.requestRender();
-  });
-  $('trackPanel').addEventListener('click', e => {
-    const g = e.target.dataset && e.target.dataset.group;
-    if (!g || !state.base) return;
-    const members = state.base.parts.filter(p => p.group === g).map(p => p.name);
-    const allPinned = members.every(n => state.pinned.has(n));
-    members.forEach(n => allPinned ? state.pinned.delete(n) : state.pinned.add(n));
+  /** Pins or unpins a track, then re-applies the view (Clip view grows to the pinned tracks). */
+  function setPinned(name, on) {
+    if (!name) return;
+    if (on) state.pinned.add(name); else state.pinned.delete(name);
     store.set('pinned', [...state.pinned]);
     renderTrackList();
-    C.requestRender();
-  });
-  $('clearPins').addEventListener('click', () => {
+    C.applyView();
+  }
+  function clearPins() {
     state.pinned.clear();
     store.set('pinned', []);
     renderTrackList();
-    C.requestRender();
-  });
-  $('pinBtn').addEventListener('click', () => C.togglePin(C.currentTrack()));
+    C.applyView();
+  }
+  /** Score view shows 'all' instruments (default) or only the 'pinned' ones (+ the selected clip's track). */
+  function setScoreShow(v) {
+    state.scoreShow = v === 'pinned' ? 'pinned' : 'all';
+    store.set('scoreShow', state.scoreShow);
+    C.applyView();
+  }
 
-  Object.assign(C, { renderTrackList });
+  $('pinBtn').addEventListener('click', e => { C.togglePin(C.currentTrack()); e.currentTarget.blur(); });
+
+  Object.assign(C, { renderTrackList, setPinned, clearPins, setScoreShow });
 })();

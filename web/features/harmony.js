@@ -801,7 +801,7 @@
 
     SV.addStyle(`
       #paper { position: relative; }
-      #paper > svg { position: relative; z-index: 1; }
+      #paper > svg, #paper > .svc { position: relative; z-index: 1; }
       #paper .hv-layer { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
       #paper .hv-bands { z-index: 0; }
       #paper .hv-marks { z-index: 2; }
@@ -888,11 +888,11 @@
       html += row(PALETTE.grey, '<b>Non-chord tones</b> · passing, neighbour, suspension…', '“Decoration — no harmonic function”');
       html += `<div class="foot">Marks: <b style="color:${PALETTE.orange}">deceptive</b> (V→vi, Blue→Orange) · arcs show V→I fulfilled ·
         <b>?</b> unresolved tension · endings: Blue = <i>eternal question</i>, Yellow = <i>eternal journey</i> · → key = modulation.<br>
-        Home key: <b>${current ? current.homeName : '—'}</b>. <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>↑</kbd><kbd>↓</kbd> moves selected notes to the next chord tone.</div>`;
+        Home key: <b>${current ? current.homeName : '—'}</b>. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>↑</kbd><kbd>↓</kbd> moves selected notes to the next chord tone.</div>`;
       legend.innerHTML = html;
     }
     syncPanel();
-    SV.addHelp('<kbd>H</kbd> harmony colours · <kbd>Shift</kbd>+<kbd>H</kbd> colour view · <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>↑</kbd><kbd>↓</kbd> next chord tone');
+    SV.addHelp('<kbd>H</kbd> harmony colours · <kbd>Shift</kbd>+<kbd>H</kbd> colour view · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>↑</kbd><kbd>↓</kbd> next chord tone');
 
     // ---- analysis + decoration before engraving
     SV.hooks.transformScore.push(score => {
@@ -1169,7 +1169,7 @@
         save(); syncPanel(); SV.render();
         return true;
       }
-      if (e.altKey && e.shiftKey && !e.ctrlKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
         aimSelection(e.key === 'ArrowUp' ? 1 : -1);
         return true;
       }
@@ -1179,7 +1179,7 @@
     if (SV.shortcuts) {
       SV.shortcuts.register({ keys: 'H', owner: 'harmony', desc: 'harmony colours on / off' });
       SV.shortcuts.register({ keys: 'Shift+H', owner: 'harmony', desc: 'next colour view' });
-      SV.shortcuts.register({ keys: ['Alt+Shift+ArrowUp', 'Alt+Shift+ArrowDown'], owner: 'harmony', desc: 'selected note to the next chord tone up / down' });
+      SV.shortcuts.register({ keys: ['Ctrl+Shift+ArrowUp', 'Ctrl+Shift+ArrowDown'], owner: 'harmony', desc: 'selected note to the next chord tone up / down' });
     }
 
     function analysisNow() {

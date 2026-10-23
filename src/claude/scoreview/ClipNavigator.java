@@ -218,7 +218,7 @@ final class ClipNavigator
    {
       results.clear();
       stayed = "null";
-      if (crawling.getAsBoolean()) return refuse("The arrangement is being read; try again when it has finished.");
+      if (crawling.getAsBoolean()) return refuse("The arrangement is being read (or a clip probe runs); try again when it has finished.");
       if (transport.isPlaying().get()) return refuse("Stop playback first.");
       if (!arrangerActive.getAsBoolean()) return refuse("Switch Score View to the Arranger source first.");
       if (!clip.exists().get()) return refuse("Click a clip in the Arranger first (this puts Bitwig's focus on the timeline).");

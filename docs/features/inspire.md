@@ -7,7 +7,7 @@ library (Hopeful, Melancholy, Suspense). One clip, one staff (divisi); spreading
 Explode. Existing notes in the range are replaced by default; **Again** swaps the last roll for another progression.
 
 **Melody** chords come from, in order: the harmony of the other staves (Score mode); in Clip mode the other tracks of
-the last ⟳ Read arrangement under the selected clip (`SV.arrangement.liveClip()` gives its crawled clip; content step 0
+the last ⟳ Read project under the selected clip (`SV.arrangement.liveClip()` gives its crawled clip; content step 0
 is at clip start − play start in arranger beats); the last pad Inspire wrote (`scoreview.inspire.lastPad`).
 
 ## Owns

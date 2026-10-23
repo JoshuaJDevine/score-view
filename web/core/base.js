@@ -8,7 +8,10 @@
 //   core/base.js       window.SV, the internal namespace SV.core, state, preferences, feature hooks
 //   core/shortcuts.js  SV.shortcuts: the keyboard shortcut registry (descriptive) and the help table
 //   core/sources.js    note sources: live clip, clip placement, overlays, visible tracks, the score model
-//   core/render.js     render pipeline (render / requestRender), status line, selection + playhead paint, SV.geom
+//   core/svg-inline.js Verovio glyph <use>s -> inline <path>s (window.SvgInline; also loads in Node)
+//   core/chunks.js     chunked engraving plans: system breaks, hidden staves, cache keys (window.ScoreChunks; Node too)
+//   core/engrave.js    the engraving engine: Web Workers (core/engrave-worker.js), main-thread fallback, SVG cache
+//   core/render.js     render pipeline (render / requestRender / rendered), status line, selection + playhead paint, SV.geom
 //   core/net.js        Bitwig connection: /api/notes and /api/play polling, send()
 //   core/project.js    DAWproject base layer (watched file), fresh / new scores
 //   core/tracks.js     the Tracks ▾ picker and pins
@@ -31,18 +34,22 @@
   };
 
   const state = {
+    // view = the Clip / Score buttons; mode, range and trackMode follow from it (core/ui.js applyView)
+    view: store.get('view', store.get('mode', 'clip')), scoreShow: store.get('scoreShow', 'all'),
     mode: store.get('mode', 'clip'), source: 'arranger', layout: 'page',
     liveData: null,
     base: null,                        // parsed DAWproject
-    baseHandle: null, baseMtime: 0,
+    baseMtime: 0,
     overlays: new Map(),               // "track@offset" -> { track, offset, length, notes } snapshots of edited clips
     editedTracks: new Set(),           // tracks edited from Score View since the base was loaded
+    lastEditMs: 0,                     // when Score View last sent note edits (core/net.js send)
     trackSince: 0,                     // when the selected clip's track last changed
-    align: null,                       // { track, key, offset, how: 'match'|'playhead'|'manual', cands } live clip placement
+    settledAt: 0,                      // when hooks.liveSettled last ran (core/net.js)
+    align: null,                       // { track, key, offset, how: 'match'|'playhead'|'manual'|'guess'|'mirror', cands } live clip placement
     playPos: -1,                       // arranger playhead (beats), for choosing between equally good placements
-    trackMode: store.get('trackMode2', 'pinned'),  // 'pinned' (pins + selected clip's track) | 'all'
+    trackMode: 'all',                  // 'pinned' (pins + selected clip's track) | 'all'; set by applyView
     pinned: new Set(store.get('pinned', [])),
-    range: store.get('range', 'clip'), // 'clip' | 'all'
+    range: 'all',                      // 'clip' | 'all'; set by applyView (print / export change it for one render)
     selection: new Set(),              // live note ids "Lch_x_y"
     render: null,                      // replaced by an accessor in core/render.js (a pending requestRender runs on read)
     playBeat: -1, playing: false, connected: false,
@@ -65,6 +72,7 @@
     paperClick: [],     // fn(e, hit) -> true                  click that did not hit a note; hit = SV.hitTest(e)
     paperMouseDown: [], // fn(e, noteEl|null) -> true          any left/right press on the paper, before the built-in click
     liveData: [],       // fn(liveData)                        every change from Bitwig
+    liveSettled: [],    // fn(liveData)                        once the extension reports settled data (d.settled; else SETTLE_MS of quiet): safe after a clip switch
     play: [],           // fn({playing, step, pos, ...})       ~20x per second
     visibleTracks: [],  // fn(namesSet, allNames) -> Set|undefined   score mode: which tracks to show (first Set wins)
   };

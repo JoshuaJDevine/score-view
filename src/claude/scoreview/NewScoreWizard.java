@@ -84,6 +84,13 @@ final class NewScoreWizard
    // ---- requests from HTTP threads
    private volatile String pendingPlan;
    private volatile boolean cancelRequested;
+   /** Skip (POST /api/wizard?skipGroups): stop waiting for Bitwig's focus, leave the remaining groups ungrouped. */
+   private volatile boolean skipGroups;
+   /** The group waiting for the user to click into Bitwig ("" = none); see groupAttempt. */
+   private volatile String waitFocus = "";
+   private long waitSince;
+   private boolean gaveUp; // waited FOCUS_WAIT_MS once in this job
+   static final long FOCUS_WAIT_MS = 60_000, RETRY_MS = 700;
 
    // ---- job state (control thread; read by statusJson from HTTP threads)
    private volatile String state = "idle", kind = "", message = "";
@@ -232,6 +239,7 @@ final class NewScoreWizard
          final String body;
          try (java.io.InputStream in = ex.getRequestBody()) { body = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8); }
          if (q.contains("cancel")) { cancel(); json = "{\"ok\":true}"; }
+         else if (q.contains("skipGroups")) { skipGroups = true; json = "{\"ok\":true}"; }
          else
          {
             final String err = submit(body);
@@ -265,6 +273,7 @@ final class NewScoreWizard
          sb.append("{\"state\":\"").append(state).append("\",\"kind\":\"").append(kind).append('"')
             .append(",\"message\":").append(ScoreViewExtension.jsonStr(message))
             .append(",\"step\":").append(stepNo).append(",\"steps\":").append(stepTotal)
+            .append(",\"waitFocus\":").append(ScoreViewExtension.jsonStr(waitFocus))
             .append(",\"tracks\":[");
          for (int i = 0; i < rows.size(); i++)
          {
@@ -340,6 +349,7 @@ final class NewScoreWizard
       {
          cancelRequested = false;
          note("Cancelled by the user.");
+         waitFocus = "";
          queue.clear();
          current = null;
          beginFinalize();
@@ -377,7 +387,12 @@ final class NewScoreWizard
 
    private void add(final String label, final Runnable act, final BooleanSupplier done, final long minMs, final long maxMs, final Runnable onTimeout)
    {
-      queue.addLast(new Step(label, act, done, minMs, maxMs, onTimeout));
+      add(new Step(label, act, done, minMs, maxMs, onTimeout));
+   }
+
+   private void add(final Step s)
+   {
+      queue.addLast(s);
       stepTotal++;
    }
 
@@ -394,6 +409,9 @@ final class NewScoreWizard
    private void start(final String plan)
    {
       synchronized (rows) { rows.clear(); groups.clear(); errors.clear(); notes.clear(); settings.clear(); }
+      skipGroups = false;
+      gaveUp = false;
+      waitFocus = "";
       presetRoots = null;
       queue.clear();
       current = null;
@@ -487,10 +505,14 @@ final class NewScoreWizard
          if (run != null) { run.members.add(r); prevMember = r; }
          prevGroup = r.group;
       }
-      // Group each run of consecutive tracks in one go, once all tracks (and their devices) exist.
+      // Group each run of consecutive tracks in one go once all tracks exist, then insert the devices: a plug-in loading
+      // a big patch (BBC SO presets) opens its window late and takes the focus the Group action needs (live, 2026-10-18:
+      // four BBC SO tracks were left ungrouped when the devices came first).
       final List<GroupRun> runs;
-      synchronized (rows) { runs = new ArrayList<>(groups.values()); }
+      final List<Row> all;
+      synchronized (rows) { runs = new ArrayList<>(groups.values()); all = new ArrayList<>(rows); }
       for (final GroupRun g : runs) planGroupRun(g);
+      for (final Row r : all) if (!r.devs.isEmpty()) planDevices(r);
    }
 
    // ---------------------------------------------------------------- starter settings (tempo, meter, markers)
@@ -642,7 +664,6 @@ final class NewScoreWizard
          final int i = find(r.tag);
          if (rgb != null && i >= 0) slots[i].color().set(rgb[0], rgb[1], rgb[2]);
       }, () -> true, 0, 1000, () -> {});
-      if (!r.devs.isEmpty()) planDevices(r);
    }
 
    /** True when the track at flat slot i sits directly under a group header that is its parent. */
@@ -664,20 +685,7 @@ final class NewScoreWizard
          return;
       }
       final Row first = run.members.get(0);
-      add("Selecting " + run.name + " tracks", () -> {
-         final int i = find(first.tag);
-         if (i >= 0) slots[i].selectInEditor();
-         headerFocus.invoke();
-      }, () -> true, 250, 1000, () -> {});
-      for (int k = 1; k < run.members.size(); k++)
-      {
-         final Row m = run.members.get(k);
-         add("Adding " + m.name + " to the selection", () -> { cursorNext.invoke(); toggleSel.invoke(); }, () -> true, 150, 600, () -> {});
-      }
-      add("Grouping " + run.name, groupAction::invoke, () -> grouped(find(first.tag)), 150, 3000, () -> {
-         run.msg = "\"Group\" did not put the tracks in a group; tracks left ungrouped.";
-         error(run.name + ": " + run.msg);
-      });
+      for (final Step s : groupAttempt(run, 3000)) add(s);
       add("Naming group " + run.name, () -> {
          final int i = find(first.tag);
          if (!grouped(i)) return;
@@ -700,6 +708,61 @@ final class NewScoreWizard
             if (!m.grouped && m.groupMsg.isEmpty()) m.groupMsg = run.ok ? "Not included in the group." : run.msg;
          }
       }, () -> true, 0, 100, () -> {});
+   }
+
+   /**
+    * One try at grouping a run: select the first member, focus the track header area, add each further member to the
+    * selection, invoke Group. Bitwig's Group (and the selection actions) only act while Bitwig's window has the keyboard
+    * focus (live, 2026-10-18: clicking Yes in Score View's window left the tracks ungrouped; with Bitwig in front they
+    * grouped). So a failed try waits for the user: status waitFocus (the page asks for a click into Bitwig) and the
+    * whole try again every RETRY_MS (re-selecting, since that click may change the selection) until it works, Skip
+    * (POST /api/wizard?skipGroups) or FOCUS_WAIT_MS.
+    */
+   private List<Step> groupAttempt(final GroupRun run, final long groupMaxMs)
+   {
+      final Row first = run.members.get(0);
+      final List<Step> out = new ArrayList<>();
+      // A group that arrived late (after a try gave up) must not get another Group: that would nest a second group.
+      final BooleanSupplier done = () -> grouped(find(first.tag));
+      out.add(new Step("Selecting " + run.name + " tracks", () -> {
+         if (done.getAsBoolean()) return;
+         final int i = find(first.tag);
+         if (i >= 0) slots[i].selectInEditor();
+         headerFocus.invoke();
+      }, () -> true, 250, 1000, () -> {}));
+      for (int k = 1; k < run.members.size(); k++)
+      {
+         final Row m = run.members.get(k);
+         out.add(new Step("Adding " + m.name + " to the selection", () -> {
+            if (!done.getAsBoolean()) { cursorNext.invoke(); toggleSel.invoke(); }
+         }, () -> true, 150, 600, () -> {}));
+      }
+      out.add(new Step("Grouping " + run.name, () -> { if (!done.getAsBoolean()) groupAction.invoke(); }, () -> {
+         final boolean ok = done.getAsBoolean();
+         if (ok) waitFocus = "";
+         return ok;
+      }, 150, groupMaxMs, () -> groupFailed(run)));
+      return out;
+   }
+
+   private void groupFailed(final GroupRun run)
+   {
+      final long now = System.currentTimeMillis();
+      if (waitFocus.isEmpty()) waitSince = now;
+      if (skipGroups || gaveUp || now - waitSince > FOCUS_WAIT_MS)
+      {
+         run.msg = skipGroups ? "Grouping skipped; tracks left ungrouped (select them in Bitwig and press Ctrl+G)."
+            : "Bitwig was not in front, so \"Group\" could not act; tracks left ungrouped (select them in Bitwig and press Ctrl+G).";
+         error(run.name + ": " + run.msg);
+         waitFocus = "";
+         gaveUp = true; // later groups of this job get one try each, no second wait
+         return;
+      }
+      waitFocus = run.name; // the page shows "Click Bitwig's title bar to finish grouping"
+      final List<Step> again = groupAttempt(run, RETRY_MS);
+      again.add(0, new Step("Waiting for Bitwig to group " + run.name + " (click Bitwig's window)", () -> {}, () -> true, 300, 1000, () -> {}));
+      for (int k = again.size() - 1; k >= 0; k--) queue.addFirst(again.get(k));
+      stepTotal += again.size();
    }
 
    private boolean inGroup(final int slot, final GroupRun run)

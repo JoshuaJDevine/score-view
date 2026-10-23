@@ -17,7 +17,7 @@ await withPage({ port: Number(process.env.PORT || 8801) }, async ({ page, srv, e
   await new Promise(r => setTimeout(r, 500));
   const moves = srv.edits.filter(e => e.startsWith('move'));
   assert.equal(moves.length, 1, 'one move op sent: ' + JSON.stringify(srv.edits));
-  assert.match(moves[0], /^move 0 \d+ \d+ 0 1$/);
+  assert.match(moves[0], /^move 0 \d+ \d+ 0 [12]$/); // ↑ = a scale step (Score View keys)
   assert.deepEqual(errors, []);
 
   // Toolbar ids are unique (Import… and Instruments ▾ once shared "sviBtn") and each button sits in its cluster.

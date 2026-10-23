@@ -37,10 +37,10 @@ await withPage({ port: PORT, width: 1440, height: 900, mode: 'score' }, async ({
     assert.ok(await inside(page, id, SEL.statusBar), id + ' in the status bar');
   for (const id of ['#simplify', '#follow', '#condense', '#hideKs', '#audition', '#sviNames', '#sviTransposed', '#sviRanges', '#svaDyn', '#svpbMarks', '#svpSel'])
     assert.ok(await inside(page, id, MENUS.view.panel), id + ' in View ▾');
-  for (const id of ['#freshBtn', '#openBtn', '#svImportBtn', '#mxExport', '#svpPrintBtn', '#svwOpen'])
+  for (const id of ['#freshBtn', '#svImportBtn', '#mxExport', '#svpPrintBtn', '#svwOpen'])
     assert.ok(await inside(page, id, MENUS.file.panel), id + ' in File ▾');
-  assert.ok(await inside(page, '#svarExact', MENUS.read.panel), 'Exact clip lengths in Read ▾');
-  assert.ok(await visible(page, '#svarRead'), 'Read arrangement stays in the app bar');
+  assert.equal(await page.$(MENUS.read.button), null, 'no empty Read ▾ (exact clip lengths are automatic now)');
+  assert.ok(await visible(page, '#svarRead'), 'Read project stays in the app bar');
   await shot(page, 'compact');
 
   // View ▾: a checkbox keeps the menu open, Esc closes it; a click outside closes it too
@@ -81,7 +81,7 @@ await withPage({ port: PORT, width: 1440, height: 900, mode: 'score' }, async ({
     saved: JSON.parse(localStorage.getItem('scoreview.layout.header')),
     simplifyInHeader: !!document.querySelector('header .group #simplify'),
     keyInHeader: !!document.querySelector('header .group #keySel'),
-    exactByRead: !!document.querySelector('.svl-read #svarExact'),
+
     importInBar: !!document.querySelector('#featureBar .svl-cluster[data-k="file"] #svImportBtn'),
     dotInStatus: !!document.querySelector('#status #dot'),
     help: !!document.querySelector('footer #helpToggle'),
@@ -89,7 +89,7 @@ await withPage({ port: PORT, width: 1440, height: 900, mode: 'score' }, async ({
   }));
   assert.equal(classic.layout, 'classic');
   assert.equal(classic.saved, 'classic', 'saved as scoreview.layout.header');
-  assert.ok(classic.simplifyInHeader && classic.keyInHeader && classic.exactByRead && classic.importInBar && classic.dotInStatus && classic.help,
+  assert.ok(classic.simplifyInHeader && classic.keyInHeader && classic.importInBar && classic.dotInStatus && classic.help,
     'classic puts every element back: ' + JSON.stringify(classic));
   assert.ok(classic.rows > 1, 'classic header has stacked rows');
   await shot(page, 'classic');

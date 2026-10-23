@@ -108,6 +108,30 @@ add('6/8 stays straight', { title: '6/8', timeSig: { num: 6, den: 8 }, keyFifths
   assert.equal(r.tuplets, 0);
 });
 
+// Score intent (opts.interpret, default on): a sampler performance reads as the plainest rhythm it can mean.
+const durs = mei => (mei.match(/<(note|rest)\b[^>]*>/g) || []).map(x => (x.startsWith('<rest') ? 'r' : x.match(/pname="(\w)"/)[1]) +
+  x.match(/dur="(\w+)"/)[1] + (/dots="1"/.test(x) ? '.' : '') + (/tie="[im]"/.test(x) ? '~' : '')).join(' ');
+// Violin 1 bar 9 of a study score after Bitwig's 16th quantize: starts on 16ths (D a 16th early), lengths as played.
+const violinBar = () => one('violin bar', [N(0, 6.893871307373047, 63), N(6.75, 1.3092041015625, 62), N(8, 4.0639190673828125, 60),
+  N(12, 3.9182205200195312, 57)], { partName: 'Violin 1' });
+add('intent: early note and loose lengths read as meant', violinBar(), {}, r => {
+  assert.equal(durs(r.mei), 'e1~ e2. d4 c1 a1');
+});
+add('intent off: as played', violinBar(), { interpret: false }, r => {
+  assert.equal(durs(r.mei), 'e1~ e2~ e8. d16~ d4 c1 a1');
+});
+add('intent: an explicit reading (straight 16ths) is read as played', violinBar(),
+  { measureOverrides: { 2: { grid: 2, tuplets: 'off' } } }, r => {
+  assert.match(durs(r.mei), /d16/);
+});
+add('intent: a played 16th run stays 16ths', one('16th run', seq(range(0, 2, 0.25).map((s, i) => s + [0.04, -0.05, 0.03, -0.04][i % 4]),
+  [0.24], scale).concat(N(2, 2, 72))), {}, r => {
+  assert.equal(count(r.mei, /dur="16"/g), 8);
+});
+add('intent: dotted 8th + 16th stays dotted', one('dotted', [N(0.02, 0.7, 72), N(0.79, 0.2, 74), N(1.03, 0.95, 76), N(2, 2, 77)]), {}, r => {
+  assert.match(durs(r.mei), /^c8\. d16 e4 f2/);
+});
+
 let failed = 0;
 const sheets = [];
 for (const c of cases) {

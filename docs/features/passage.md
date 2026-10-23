@@ -11,8 +11,11 @@ in another clip of the live track) makes that clip live in Bitwig.
 
 Every write is one clip-navigator batch: `goto <clip>` + `del` / `dur` / `add` for each target clip, and the first
 target's clip last with `gotoStay`, so Bitwig is **left on the pasted clip** with the pasted notes selected (↑↑ works at
-once). The base is rebuilt from the updated crawl (no new read needed). Needs a ⟳ Read arrangement (clear message
-otherwise); refused while playing; refused when the read is out of date for a target track (`SV.arrangement.staleReasons()`);
+once). The base is rebuilt from the updated crawl (no new read needed). Needs a ⟳ Read project (clear message
+otherwise); refused while playing; refused when the read is out of date for a target track (`SV.arrangement.staleReasons()`: changed, a clip that may
+have moved, an unsure clip, heard while playing, or the track list), and when the read was restored from storage and a
+target clip has not been seen in Bitwig since (`SV.arrangement.unconfirmed()`: Bitwig may have changed it while the page
+was closed; click it once in Bitwig, or read again);
 a target clip that loops more than once, or a bar with no clip, refuses the whole paste (nothing is written). A clip with
 the same notes and play range elsewhere is reported as a possible **clip alias** (it would change too).
 

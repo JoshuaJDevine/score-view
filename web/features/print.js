@@ -105,7 +105,7 @@
       return q;
     });
     const score = { ...src, title: opts.title, parts, groupLabels: false };
-    const built = SV.ScoreBuilder.buildMEI(score, { ...(lastBuildOpts || { grid: 2, simplify: true }) });
+    const built = SV.ScoreBuilder.buildMEI(score, { ...(lastBuildOpts || { grid: 2, simplify: true, interpret: true }) });
     let mei = built.mei;
     // A part has its name in the header: no instrument labels or single-staff bracket on every system.
     if (opts.part) mei = mei.replace(/<label>[\s\S]*?<\/label><labelAbbr>[\s\S]*?<\/labelAbbr>/g, '')
@@ -139,7 +139,9 @@
     if (!t.loadData(mei)) throw new Error('Verovio could not engrave the print: ' + t.getLog());
     const loadMs = performance.now() - tl;
     const pages = t.getPageCount(), svgs = [];
-    for (let p = 1; p <= pages; p++) svgs.push(t.renderToSVG(p));
+    // glyph <use>s -> inline <path>s, as on the paper (core/svg-inline.js): a full score's style recalc drops from seconds
+    const inline = window.SvgInline && window.SvgInline.enabled() ? window.SvgInline.inlineGlyphs : s => s;
+    for (let p = 1; p <= pages; p++) svgs.push(inline(t.renderToSVG(p)));
     return { svgs, pages, w, h, loadMs };
   }
 

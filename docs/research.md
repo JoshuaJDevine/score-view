@@ -94,7 +94,7 @@ Ranked by value × feasibility.
 - The API 25 sources contain no "articulation" anywhere.
 - A VI-Control user on 6.0 says: "Still no native articulation mapping…" (https://vi-control.net/community/threads/bitwig-6-0-officially-released.170801/).
 
-**The presets.** They are at `C:\Users\you\Documents\Bitwig Studio\Library\Presets\Note FX Layer\Articulation Map BBCSO *.bwpreset` (19 files + Template).
+**The presets.** They are at `C:\Users\jd838\OneDrive\Documents\Bitwig Studio\Library\Presets\Note FX Layer\Articulation Map BBCSO *.bwpreset` (19 files + Template).
 - Header metadata: `creator JSONBach`, `application_version_name 5.3.13`, `device_name Note FX Layer`, `tags "articulation play-aware"`, internal name `BBCSO_ArticulationMaps_Strings`.
 - The binary `BtWg` container is readable enough with a strings scan.
 

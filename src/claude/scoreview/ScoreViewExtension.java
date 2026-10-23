@@ -25,6 +25,8 @@ import com.bitwig.extension.controller.api.CueMarker;
 import com.bitwig.extension.controller.api.CueMarkerBank;
 import com.bitwig.extension.controller.api.CursorClip;
 import com.bitwig.extension.controller.api.CursorTrack;
+import com.bitwig.extension.controller.api.Device;
+import com.bitwig.extension.controller.api.DeviceBank;
 import com.bitwig.extension.controller.api.NoteStep;
 import com.bitwig.extension.controller.api.PlayingNote;
 import com.bitwig.extension.controller.api.SettableBooleanValue;
@@ -69,29 +71,35 @@ public class ScoreViewExtension extends ControllerExtension
          clip.setStepSize(1.0 / STEPS_PER_BEAT);
          clip.scrollToKey(0);
          clip.scrollToStep(0);
-         clip.exists().addValueObserver(v -> changed());
-         clip.getPlayStop().addValueObserver(v -> changed());
-         clip.getLoopLength().addValueObserver(v -> changed());
-         clip.getLoopStart().addValueObserver(v -> changed());
-         clip.isLoopEnabled().addValueObserver(v -> changed());
-         clip.getPlayStart().addValueObserver(v -> changed());
+         // The clip's identity and play range: a change means another clip (or a trimmed one), see LiveSync.
+         clip.exists().addValueObserver(v -> switched());
+         clip.getPlayStop().addValueObserver(v -> switched());
+         clip.getLoopLength().addValueObserver(v -> switched());
+         clip.getLoopStart().addValueObserver(v -> switched());
+         clip.isLoopEnabled().addValueObserver(v -> switched());
+         clip.getPlayStart().addValueObserver(v -> switched());
          clip.color().markInterested();
-         track.name().addValueObserver(v -> changed());
+         track.name().addValueObserver(v -> switched());
          clip.playingStep().markInterested();
          clip.addNoteStepObserver(step -> {
+            final boolean on = step.state() == NoteStep.State.NoteOn;
             synchronized (lock)
             {
                final String key = step.channel() + "_" + step.x() + "_" + step.y();
-               if (step.state() == NoteStep.State.NoteOn) notes.put(key, step);
+               final boolean had = notes.containsKey(key);
+               if (on) notes.put(key, step);
                else notes.remove(key);
+               // Marked changed under the same lock: a /api/notes JSON (built under it) never reports settled = true
+               // with a half-applied burst (the page would harvest or remember a clip missing a note).
+               sync.notes(on && !had ? 1 : 0, !on && had ? 1 : 0);
+               bump();
             }
-            changed();
          });
       }
 
-      void changed()
+      void switched()
       {
-         bump();
+         bumpSwitch();
       }
    }
 
@@ -101,11 +109,14 @@ public class ScoreViewExtension extends ControllerExtension
       final Track track;
       final int index; // position in the flat bank; the "index" used by the solo/mute ops
       volatile boolean selected;
+      volatile int peak;  // highest output level (0..127, peak, both channels) since GET /api/meter last read it
+      volatile int level; // the latest level (Bitwig reports changes only: a steady level sends nothing)
 
       TrackInfo(final Track track, final int index)
       {
          this.track = track;
          this.index = index;
+         track.addVuMeterObserver(128, -1, true, v -> { level = v; if (v > peak) peak = v; });
          track.exists().addValueObserver(v -> bump());
          track.name().addValueObserver(v -> bump());
          track.isGroup().addValueObserver(v -> bump());
@@ -113,7 +124,10 @@ public class ScoreViewExtension extends ControllerExtension
          track.solo().addValueObserver(v -> bump());
          track.mute().addValueObserver(v -> bump());
          track.trackType().markInterested();
-         track.addIsSelectedInEditorObserver(v -> { selected = v; bump(); });
+         track.canHoldNoteData().markInterested(); // the crawler may step past lanes that cannot hold notes
+         track.addIsSelectedInEditorObserver(v -> { selected = v; bumpSwitch(); }); // another track: a clip switch
+         // Listen while playing (GET /api/listen): every note the track reports, stamped with the arranger position.
+         track.addNoteObserver((on, key, velocity) -> listened(index, on, key, velocity));
       }
    }
 
@@ -144,13 +158,42 @@ public class ScoreViewExtension extends ControllerExtension
       openedGroups.clear();
    }
 
+   /**
+    * Something the page shows changed. It is published as a new /api/notes version by the next flush() or sync tick
+    * (LiveSync: one version per burst of callbacks, then one more with settled = true once it is quiet).
+    */
    private void bump()
    {
-      lastChangeMs = System.currentTimeMillis();
+      final long now = System.currentTimeMillis();
+      lastChangeMs = now;
       // While crawling, every clip change would wake the page (and rebuild big JSON under the lock the note
       // observers need); the crawler only needs lastChangeMs. One real bump happens when the crawl finishes.
-      if (crawler != null && crawler.running()) return;
-      if (navigator != null && navigator.inSession()) return; // the page would see the other clips go by
+      // While the clip navigator is in a session the page would see the other clips go by.
+      sync.changed(now, suppressed());
+   }
+
+   /** bump() for a change that suggests another clip was selected: settled waits LiveSync.SWITCH_QUIET_MS. */
+   private void bumpSwitch()
+   {
+      sync.switched();
+      bump();
+   }
+
+   private boolean suppressed()
+   {
+      return (crawler != null && crawler.running()) || (navigator != null && navigator.inSession()) || probing();
+   }
+
+   /** The Developer-mode clipStepProbe is stepping the arranger selection: no crawl, goto or harvest meanwhile. */
+   private boolean probing()
+   {
+      return clipProbe != null && clipProbe.running();
+   }
+
+   /** Publishes a new version when LiveSync says one is due (control thread: flush() and the sync tick). */
+   private void publish()
+   {
+      if (sync.publish(System.currentTimeMillis(), suppressed()) == LiveSync.Publish.NONE) return;
       synchronized (lock)
       {
          version++;
@@ -158,13 +201,24 @@ public class ScoreViewExtension extends ControllerExtension
       }
    }
 
+   private void syncTick()
+   {
+      if (!running) return;
+      publish();
+      host.scheduleTask(this::syncTick, LiveSync.TICK_MS);
+   }
+
    private final Object lock = new Object();
+   private final LiveSync sync = new LiveSync();
    private final List<TrackInfo> tracks = new ArrayList<>();
    private final List<CueMarker> markers = new ArrayList<>();
    private String actionsJson = "[]";
    private volatile String lastAction = "";
    private volatile long lastChangeMs;
    private ArrangementCrawler crawler;
+   /** The last arrangement read per project (GET/POST /api/arrangement), in memory and under the user's documents. */
+   private ArrangementMirror mirror;
+   private volatile String crawlProject; // the project a crawl started in (its result is stored for that project)
    private ClipNavigator navigator;
    private long lastOpMs;
    private NewScoreWizard wizard;
@@ -176,11 +230,27 @@ public class ScoreViewExtension extends ControllerExtension
    private final java.util.concurrent.atomic.AtomicReference<String> pendingMarks = new java.util.concurrent.atomic.AtomicReference<>();
    static final int MARKS_MAX = 65535;
    private long version = 1;
+   /** Listen while playing: notes reported per track (NoteListen, GET /api/listen) and the play position they are stamped with. */
+   private final NoteListen listen = new NoteListen(MAX_TRACKS);
+   private volatile double playPosBeat;
+   private volatile long playPosMs;
+   static final double LISTEN_MAX_AHEAD = 0.25; // beats a note's stamp may be moved on past the last reported position
+   /** When Bitwig last called flush() (after delivering a batch of observer callbacks): the crawler's adaptive waits. */
+   private volatile long lastFlushMs;
+   /** Preferences > Score View: Read arrangement timing and lane skipping (ArrangementCrawler; both default to the safe walk). */
+   private SettableEnumValue crawlTiming;
+   private SettableBooleanValue crawlSkipLanes;
+   /** Research: CursorClip.selectNext() from a valid selected clip (dev op clipStepProbe; never used by the crawl). */
+   private ClipStepProbe clipProbe;
    private final ConcurrentLinkedQueue<String[]> pendingEdits = new ConcurrentLinkedQueue<>();
    private ControllerHost host;
    private Transport transport;
    private Application application;
    private CursorTrack cursorTrack;
+   // The selected track's top-level devices (names, on/off): the page warns about articulation-map Note FX in front of
+   // the instrument (they send their own keyswitch before every note) and can switch one off (op deviceOn).
+   private static final int TRACK_DEVICES = 8;
+   private DeviceBank trackDevices;
    private Source arranger, launcher;
    private volatile Source active;
    private HttpServer server;
@@ -217,6 +287,11 @@ public class ScoreViewExtension extends ControllerExtension
       stayPlayStart = host.getPreferences().getEnumSetting(ClipNavigator.STAY_PLAY_START_SETTING, "Score View",
          new String[] { ClipNavigator.PLAY_START_KEEP, ClipNavigator.PLAY_START_TARGET }, ClipNavigator.PLAY_START_KEEP);
       stayPlayStart.markInterested();
+      crawlTiming = host.getPreferences().getEnumSetting(ArrangementCrawler.TIMING_SETTING, "Score View",
+         new String[] { ArrangementCrawler.TIMING_SAFE, ArrangementCrawler.TIMING_FAST }, ArrangementCrawler.TIMING_SAFE);
+      crawlTiming.markInterested();
+      crawlSkipLanes = host.getPreferences().getBooleanSetting(ArrangementCrawler.SKIP_SETTING, "Score View", false);
+      crawlSkipLanes.markInterested();
 
       transport = host.createTransport();
       transport.timeSignature().numerator().markInterested();
@@ -229,7 +304,8 @@ public class ScoreViewExtension extends ControllerExtension
       transport.arrangerLoopStart().addValueObserver(v -> bump());
       transport.arrangerLoopDuration().addValueObserver(v -> bump());
       transport.isMetronomeEnabled().markInterested();
-      transport.playPosition().markInterested();          // CurvePlayer: the playhead while performing curves
+      // CurvePlayer: the playhead while performing curves; listen: the beat a played note is stamped with
+      transport.playPosition().addValueObserver(v -> { playPosBeat = v; playPosMs = System.currentTimeMillis(); });
       transport.automationWriteMode().markInterested();   // CurvePlayer saves and restores the user's write settings
       transport.isArrangerAutomationWriteEnabled().markInterested();
       markLauncherWrite();
@@ -253,6 +329,14 @@ public class ScoreViewExtension extends ControllerExtension
       // Notes sounding on the selected track: keyboard input (when the track monitors it) and clip playback.
       // Each callback carries the whole set; diffing it gives the note-on/off events of /api/midi.
       cursorTrack.playingNotes().addValueObserver(this::playingNotesChanged);
+      trackDevices = cursorTrack.createDeviceBank(TRACK_DEVICES);
+      for (int i = 0; i < TRACK_DEVICES; i++)
+      {
+         final Device dv = trackDevices.getItemAt(i);
+         dv.exists().addValueObserver(v -> bump());
+         dv.name().addValueObserver(v -> bump());
+         dv.isEnabled().addValueObserver(v -> bump());
+      }
       arranger = new Source("arranger", host.createArrangerCursorClip(GRID_WIDTH, GRID_HEIGHT));
       launcher = new Source("launcher", cursorTrack.createLauncherCursorClip("SCOREVIEW_LAUNCHER", "Score View", GRID_WIDTH, GRID_HEIGHT));
       active = arranger;
@@ -272,9 +356,26 @@ public class ScoreViewExtension extends ControllerExtension
             return sb.append(']').toString();
          });
 
+      mirror = new ArrangementMirror(ArrangementMirror.defaultDir(), host::errorln);
+      crawler.setOnDone(this::crawlDone);
+      crawler.setFlushClock(() -> lastFlushMs);
+      crawler.setLaneInfo(() -> {
+         // The flat bank in order (groups opened by the crawl): what each arranger lane is expected to belong to.
+         final List<ArrangementCrawler.LaneInfo> lanes = new ArrayList<>();
+         for (final TrackInfo t : tracks)
+         {
+            if (!t.track.exists().get()) continue;
+            lanes.add(new ArrangementCrawler.LaneInfo(t.track.name().get(), t.track.isGroup().get(),
+               t.track.canHoldNoteData().get(), t.track.trackType().get()));
+         }
+         return lanes;
+      });
+      clipProbe = new ClipStepProbe(host, transport, arranger.clip, arranger.track, arranger.notes, lock, () -> lastChangeMs);
+
       navigator = new ClipNavigator(host, application, transport, arranger.clip, arranger.track, () -> lastChangeMs,
          () -> (int) tracks.stream().filter(t -> t.track.exists().get()).count(),
-         this::expandCollapsedGroups, this::restoreCollapsedGroups, this::bump, () -> active == arranger, crawler::running);
+         this::expandCollapsedGroups, this::restoreCollapsedGroups, this::bump, () -> active == arranger,
+         () -> crawler.running() || probing());
       wizard = new NewScoreWizard(host, application, transport, this::bump); // New Score wizard (#14): GET/POST /api/wizard
       wizard.setDeveloperMode(developerMode::get);
       navigator.setStayPlayStartAtTarget(() -> ClipNavigator.PLAY_START_TARGET.equals(stayPlayStart.get()));
@@ -299,6 +400,7 @@ public class ScoreViewExtension extends ControllerExtension
 
       running = true;
       host.scheduleTask(this::drainEdits, 20);
+      host.scheduleTask(this::syncTick, LiveSync.TICK_MS);
       final String failure = startServer();
       host.showPopupNotification(failure != null ? failure : "Score View: http://localhost:" + port);
    }
@@ -326,9 +428,25 @@ public class ScoreViewExtension extends ControllerExtension
       synchronized (midiLock) { midiLock.notifyAll(); }
    }
 
+   /** Bitwig calls this after delivering a batch of changes: publish them now (LiveSync rate-limits bursts). */
    @Override
    public void flush()
    {
+      // The crawler's adaptive waits use the flush time too: a change followed by a flush and a short quiet is a
+      // finished update (ArrangementCrawler, "fast" timing).
+      lastFlushMs = System.currentTimeMillis();
+      if (running) publish();
+   }
+
+   /** A note played on track {@code index} (control thread): stamped with the arranger beat, kept for GET /api/listen. */
+   private void listened(final int index, final boolean on, final int key, final float velocity)
+   {
+      final long now = System.currentTimeMillis();
+      final boolean playing = transport.isPlaying().get();
+      final double beat = NoteListen.estimateBeat(playPosBeat, playPosMs, now, playing, transport.tempo().getRaw(), LISTEN_MAX_AHEAD,
+         transport.isArrangerLoopEnabled().get(), transport.arrangerLoopStart().get(), transport.arrangerLoopDuration().get());
+      final int vel = Math.round(velocity * 127);
+      listen.add(index, on && vel > 0, key, vel, beat, now, playing);
    }
 
    // ---------------------------------------------------------------- edits (control thread)
@@ -383,7 +501,7 @@ public class ScoreViewExtension extends ControllerExtension
       }
       switch (op[0])
       {
-         case "source" -> { active = "launcher".equals(op[1]) ? launcher : arranger; bump(); }
+         case "source" -> { active = "launcher".equals(op[1]) ? launcher : arranger; bumpSwitch(); }
          case "undo" -> application.undo();
          case "redo" -> application.redoAction().invoke();
          case "move" -> clip.moveStep(i(op[1]), i(op[2]), i(op[3]), i(op[4]), i(op[5]));
@@ -420,6 +538,12 @@ public class ScoreViewExtension extends ControllerExtension
          case "loopOff" -> transport.isArrangerLoopEnabled().set(false);
          case "solo" -> trackAt(op[1]).solo().set("1".equals(op[2]));
          case "mute" -> trackAt(op[1]).mute().set("1".equals(op[2]));
+         case "deviceOn" ->
+         {
+            final int i = i(op[1]);
+            if (i < 0 || i >= TRACK_DEVICES || !trackDevices.getItemAt(i).exists().get()) return;
+            trackDevices.getItemAt(i).isEnabled().set("1".equals(op[2]));
+         }
          case "metronome" -> transport.isMetronomeEnabled().set("1".equals(op[1]));
          // Crawler research (docs/research.md section C): invoke a Bitwig action by id, or step the arranger cursor.
          // Debug/wizard research: select a track of the flat bank by index (as listed in /api/notes tracks[].index).
@@ -434,7 +558,30 @@ public class ScoreViewExtension extends ControllerExtension
             final int src = i(op[1]), dst = i(op[2]);
             tracks.get(dst).track.beforeTrackInsertionPoint().moveTracks(tracks.get(src).track);
          }
-         case "crawl" -> { if (!navigator.inSession()) crawler.start(op.length > 1 && "exact".equals(op[1])); }
+         case "crawl" ->
+         {
+            if (navigator.inSession() || crawler.running() || probing()) return;
+            crawlProject = application.projectName().get();
+            // "crawl [exact] [safe|fast] [tracks <URL-encoded names...>]": the words before "tracks" are flags. "safe" /
+            // "fast" override the preferences for this read (test/crawl-run.mjs compares both); "tracks" = a targeted read.
+            boolean exact = false, adaptive = ArrangementCrawler.TIMING_FAST.equals(crawlTiming.get()), skip = crawlSkipLanes.get();
+            int k = 1;
+            for (; k < op.length && !"tracks".equals(op[k]); k++)
+            {
+               if ("exact".equals(op[k])) exact = true;
+               else if ("safe".equals(op[k])) { adaptive = false; skip = false; }
+               else if ("fast".equals(op[k])) { adaptive = true; skip = true; }
+               else host.errorln("Score View: crawl ignores the word " + op[k]);
+            }
+            crawler.configure(adaptive, skip);
+            if (k < op.length) // "crawl tracks <URL-encoded names...>": a targeted read of those tracks only
+            {
+               final Set<String> names = new java.util.LinkedHashSet<>();
+               for (k++; k < op.length; k++) names.add(java.net.URLDecoder.decode(op[k], StandardCharsets.UTF_8));
+               if (!names.isEmpty()) crawler.start(false, names);
+            }
+            else crawler.start(exact);
+         }
          // Clip navigation (ClipNavigator): select another arranger clip so the following ops edit it.
          case "goto", "gotoStay" -> navigator.gotoClip(op);
          case "gotoHome" -> navigator.gotoHome(op);
@@ -457,8 +604,35 @@ public class ScoreViewExtension extends ControllerExtension
             else lastAction = op[0] + " (arranger clip is not a CursorClip)";
             bump();
          }
+         // Research (test/clip-step-probe.mjs): CursorClip.selectNext()/selectPrevious() from a VALID selected clip,
+         // measured inside the extension. Never used by the crawl. Result: GET /api/transport "probe".
+         case "clipStepProbe" ->
+         {
+            if (crawler.running() || navigator.inSession()) { lastAction = "clipStepProbe (refused: a read or a write is running)"; return; }
+            lastAction = "clipStepProbe";
+            clipProbe.start(op.length > 1 ? Math.max(1, Math.min(8, i(op[1]))) : 3);
+         }
          default -> host.errorln("Score View: op " + op[0] + " is in EditOps but has no case in applyEdit");
       }
+   }
+
+   /**
+    * A finished full read is stored for its project right away (control thread), so the page finds it after a reload
+    * even when it was closed during the crawl. Targeted reads are merged by the page, which posts the whole mirror.
+    */
+   private void crawlDone()
+   {
+      if (crawler.subset() || !crawler.complete() || crawlProject == null) return;
+      final long now = System.currentTimeMillis();
+      final StringBuilder names = new StringBuilder("[");
+      for (final TrackInfo t : tracks)
+      {
+         if (!t.track.exists().get()) continue;
+         if (names.length() > 1) names.append(',');
+         names.append("{\"name\":").append(jsonStr(t.track.name().get())).append('}');
+      }
+      mirror.put(crawlProject, "{\"v\":1,\"project\":" + jsonStr(crawlProject) + ",\"readAt\":" + now + ",\"savedAt\":" + now
+         + ",\"by\":\"extension\",\"tracksAtRead\":" + names.append(']') + ",\"crawl\":" + crawler.statusJson() + "}");
    }
 
    // ---------------------------------------------------------------- MIDI bridge (control thread)
@@ -529,9 +703,12 @@ public class ScoreViewExtension extends ControllerExtension
          context("/api/notes", false, this::handleNotes);
          context("/api/play", false, this::handlePlay);
          context("/api/transport", false, this::handleTransport);
+         context("/api/meter", false, this::handleMeter);
          context("/api/crawl", false, ex -> send(ex, 200, "application/json", crawler.statusJson().getBytes(StandardCharsets.UTF_8)));
+         context("/api/arrangement", false, this::handleArrangement);
          context("/api/nav", false, ex -> send(ex, 200, "application/json", navigator.statusJson().getBytes(StandardCharsets.UTF_8)));
          context("/api/midi", false, this::handleMidi);
+         context("/api/listen", false, this::handleListen);
          context("/api/wizard", false, ex -> wizard.handle(ex));
          context("/api/curve", false, ex -> send(ex, 200, "application/json", curve.statusJson().getBytes(StandardCharsets.UTF_8)));
          context("/api/marks", false, this::handleMarks);
@@ -595,6 +772,12 @@ public class ScoreViewExtension extends ControllerExtension
       sb.append(",\"loop\":").append(s.clip.isLoopEnabled().get());
       sb.append(",\"loopStart\":").append(s.clip.getLoopStart().get());
       sb.append(",\"loopLength\":").append(s.clip.getLoopLength().get());
+      // Timing (LiveSync): settled = nothing changed for a quiet window (longer after a clip switch); changedMs = how
+      // long ago the last change was; selPlayStart = the play start marker, which Bitwig moves to a selected arranger
+      // clip (its arranger position once settled; null for the launcher).
+      sb.append(",\"settled\":").append(sync.settled());
+      sb.append(",\"changedMs\":").append(Math.max(0, System.currentTimeMillis() - sync.lastChangeMs()));
+      sb.append(",\"selPlayStart\":").append(s == arranger ? String.valueOf(transport.playStartPosition().get()) : "null");
       sb.append(",\"tracks\":[");
       boolean firstTrack = true;
       for (final TrackInfo t : tracks)
@@ -611,6 +794,18 @@ public class ScoreViewExtension extends ControllerExtension
             .append(",\"mute\":").append(t.track.mute().get()).append('}');
       }
       sb.append(']');
+      sb.append(",\"devices\":{\"track\":").append(jsonStr(cursorTrack.name().get())).append(",\"list\":[");
+      boolean firstDevice = true;
+      for (int i = 0; i < TRACK_DEVICES; i++)
+      {
+         final Device dv = trackDevices.getItemAt(i);
+         if (!dv.exists().get()) continue;
+         if (!firstDevice) sb.append(',');
+         firstDevice = false;
+         sb.append("{\"index\":").append(i).append(",\"name\":").append(jsonStr(dv.name().get()))
+            .append(",\"on\":").append(dv.isEnabled().get()).append('}');
+      }
+      sb.append("]}");
       sb.append(",\"markers\":[");
       boolean firstMarker = true;
       for (final CueMarker m : markers)
@@ -687,7 +882,48 @@ public class ScoreViewExtension extends ControllerExtension
       send(ex, 200, "application/json", sb.toString().getBytes(StandardCharsets.UTF_8));
    }
 
-   /** Crawler research: loop / play-start / undo state and a fingerprint of the arranger cursor clip. */
+   /**
+    * GET /api/listen?since=N: the notes played on each track since seq N (NoteListen), with the transport state and
+    * position. Returns at once (the page polls it while playing). Read-only.
+    */
+   private void handleListen(final HttpExchange ex) throws IOException
+   {
+      long since = -1;
+      final String q = ex.getRequestURI().getQuery();
+      if (q != null) for (final String part : q.split("&"))
+      {
+         if (!part.startsWith("since=")) continue;
+         try { since = Long.parseLong(part.substring(6)); }
+         catch (final NumberFormatException e) { since = -1; }
+      }
+      final String json = listen.json(since, transport.isPlaying().get(), transport.getPosition().get(), i -> {
+         final Track t = tracks.get(i).track;
+         return t.exists().get() ? t.name().get() : null;
+      });
+      send(ex, 200, "application/json", json.getBytes(StandardCharsets.UTF_8));
+   }
+
+   /**
+    * GET /api/meter: each existing track's peak output level (0..127) since the previous call, then resets them.
+    * Read-only (measuring how a library answers velocity / controls, e.g. tools/meter-probe.mjs).
+    */
+   private void handleMeter(final HttpExchange ex) throws IOException
+   {
+      final StringBuilder sb = new StringBuilder("{\"t\":").append(System.currentTimeMillis()).append(",\"tracks\":[");
+      boolean first = true;
+      for (final TrackInfo ti : tracks)
+      {
+         if (!ti.track.exists().get()) continue;
+         if (!first) sb.append(',');
+         first = false;
+         sb.append("{\"index\":").append(ti.index).append(",\"name\":").append(jsonStr(ti.track.name().get()))
+           .append(",\"peak\":").append(Math.max(ti.peak, ti.level)).append('}');
+         ti.peak = ti.level;
+      }
+      send(ex, 200, "application/json", sb.append("]}").toString().getBytes(StandardCharsets.UTF_8));
+   }
+
+   /** Crawler research: loop / play-start / undo state, a fingerprint of the arranger cursor clip, the clipStepProbe result. */
    private void handleTransport(final HttpExchange ex) throws IOException
    {
       final StringBuilder fp = new StringBuilder();
@@ -708,6 +944,7 @@ public class ScoreViewExtension extends ControllerExtension
          + ",\"pos\":" + transport.getPosition().get()
          + ",\"playing\":" + transport.isPlaying().get()
          + ",\"lastAction\":" + jsonStr(lastAction)
+         + ",\"probe\":" + clipProbe.statusJson()
          + ",\"clip\":{\"exists\":" + arranger.clip.exists().get()
          + ",\"track\":" + jsonStr(arranger.track.name().get())
          + ",\"length\":" + arranger.clip.getPlayStop().get()
@@ -767,6 +1004,40 @@ public class ScoreViewExtension extends ControllerExtension
       }
       final String m = marksJson;
       send(ex, 200, "application/json", (m == null || m.isBlank() ? "{}" : m).getBytes(StandardCharsets.UTF_8));
+   }
+
+   /**
+    * The stored arrangement read of the current project (ArrangementMirror): GET returns {project, cache (folder), doc
+    * (the stored JSON or null)}; POST ?project=<URL-encoded name> replaces it (a JSON object of at most
+    * ArrangementMirror.MAX_CHARS characters; HttpGuard requires X-ScoreView), refused with 409 when that is not the
+    * open project (the page was showing another project's read).
+    */
+   private void handleArrangement(final HttpExchange ex) throws IOException
+   {
+      final String project = application.projectName().get();
+      if ("POST".equals(ex.getRequestMethod()))
+      {
+         String want = null;
+         final String q = ex.getRequestURI().getRawQuery();
+         if (q != null) for (final String part : q.split("&"))
+            if (part.startsWith("project=")) want = java.net.URLDecoder.decode(part.substring(8), StandardCharsets.UTF_8);
+         final String body;
+         try (InputStream in = ex.getRequestBody()) { body = new String(in.readNBytes(ArrangementMirror.MAX_CHARS * 4 + 1), StandardCharsets.UTF_8).trim(); }
+         if (want == null || !want.equals(project))
+         {
+            send(ex, 409, "text/plain", ("the open project is " + project).getBytes(StandardCharsets.UTF_8));
+            return;
+         }
+         final String why = ArrangementMirror.problem(body);
+         if (why != null) { send(ex, why.startsWith("too large") ? 413 : 400, "text/plain", why.getBytes(StandardCharsets.UTF_8)); return; }
+         mirror.put(project, body);
+         send(ex, 200, "text/plain", "ok".getBytes(StandardCharsets.UTF_8));
+         return;
+      }
+      final String doc = mirror.get(project);
+      final java.nio.file.Path dir = mirror.dir();
+      send(ex, 200, "application/json", ("{\"project\":" + jsonStr(project) + ",\"cache\":" + jsonStr(dir == null ? null : dir.toString())
+         + ",\"doc\":" + (doc == null ? "null" : doc) + "}").getBytes(StandardCharsets.UTF_8));
    }
 
    @SuppressWarnings("deprecation") // still the launcher write switch in API 25; CurvePlayer restores it after a Render

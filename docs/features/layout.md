@@ -3,14 +3,14 @@
 
 ## Purpose
 Arranges what the core and the other modules put on the page.
-- "⟳ Read arrangement" sits in the header as the primary action, right after Clip | Score, with its read status:
+- "⟳ Read project" sits in the header as the primary action, right after Clip | Score, with its read status:
   "✓ N parts read · 3 min ago", or "· out of date" in the warning colour when `SV.arrangement.staleReasons()` is not
   empty (event `sv-read-stale`).
 - The feature toolbar is sorted into clusters: Score · Write · Play · File · View · More (empty ones hidden). A
   MutationObserver sorts again when a module adds to the bar later.
 - **Header layout** preference (View ▾ → Header layout; `scoreview.layout.header`):
-  - **Compact** (default): one app bar that never wraps — Clip | Score · ⟳ Read arrangement ▾ (Exact clip lengths) ·
-    Arranger | Launcher · Tracks ▾ · Pin · Clip bars | Whole song · ⌕ Commands · File ▾ · View ▾ · title. The feature
+  - **Compact** (default): one app bar that never wraps — Clip | Score · ⟳ Read project ·
+    📌 Pin · Arranger | Launcher · ⌕ Commands · File ▾ · View ▾ · title (Instruments ▾ chooses the shown tracks). The feature
     bar is one row (cluster labels hidden, and the entry pill only shows while entry is on). The status bar (features/statusbar.js) holds Key, Quantize, Page / Single
     line, Zoom, Messages, Shortcuts, render time and the connection dot; the footer help only shows when opened.
     File ▾ = New empty score, Open .dawproject… (Score mode) and the File cluster (Export MusicXML, Import…,

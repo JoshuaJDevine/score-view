@@ -11,7 +11,7 @@ subversion. It is meant as a composition aid: edit a note in Bitwig and the colo
 |---|---|
 | **H** | harmony colours on/off |
 | **Shift+H** | cycle the view: *Noteheads* → *Bands* → *Noteheads + bands* |
-| **Alt+Shift+↑ / ↓** | move the selected live notes to the next chord tone up/down ("aim assist") |
+| **Ctrl+Shift+↑ / ↓** | move the selected live notes to the next chord tone up/down ("aim assist") |
 | **Colors ▾** (toolbar) | the same switches, plus *Roman numerals above the score*, *Expectation marks*, *Snap to harmony*, *Swap cyan / magenta* and the **Legend** |
 
 * **Noteheads** — every note takes the colour of its chord's function. Non-chord tones are neutral grey;

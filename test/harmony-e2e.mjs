@@ -44,9 +44,9 @@ await withPage({ port, width: 1500, height: 900 }, async ({ page, srv, errors })
     return { y, to: SV.harmony.nextChordTone(y, beat, 1), chord: SV.harmony.chordAt(beat) };
   });
   srv.edits.length = 0;
-  await page.keyboard.down('Alt'); await page.keyboard.down('Shift');
+  await page.keyboard.down('Control'); await page.keyboard.down('Shift');
   await page.keyboard.press('ArrowUp');
-  await page.keyboard.up('Shift'); await page.keyboard.up('Alt');
+  await page.keyboard.up('Shift'); await page.keyboard.up('Control');
   await settle(600);
   const moves = srv.edits.filter(e => e.startsWith('move'));
   console.log('aim assist:', expect.y, '->', expect.to, 'in', expect.chord && expect.chord.roman, moves);

@@ -4,6 +4,7 @@
 import assert from 'assert';
 import path from 'path';
 import { withPage, ROOT } from './lib.mjs';
+import { clickIn } from './selectors.mjs';
 
 const PORT = Number(process.env.PORT || 8872);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -58,6 +59,29 @@ await withPage({ port: PORT, mode: 'clip' }, async ({ page, srv, errors }) => {
   const bar0 = Math.floor(note.start / 4) * 4, bar1 = Math.ceil(note.end / 4 - 1e-6) * 4;
   assert.equal(lastEdit(srv, /^loop/), `loop ${bar0} ${Math.max(4, bar1 - bar0)}`, 'L loops the selected bars');
   assert.equal(srv.state.play.loop.on, true);
+
+  // Click sets playhead: a plain click on a live note while stopped moves Bitwig's playhead to it (not while playing).
+  const clickLive = async from => {
+    const n = await page.evaluate(f => {
+      const t = SV.state.render.timeline.find(e => SV.isLive(e.srcId) && e.start >= f);
+      const b = document.getElementById(t.svgId).getBoundingClientRect();
+      return { x: b.x + b.width / 2, y: b.y + b.height / 2, beat: SV.parseId(t.srcId).x / SV.state.liveData.stepsPerBeat };
+    }, from);
+    const before = srv.edits.length;
+    await page.mouse.click(n.x, n.y);
+    await sleep(250);
+    return { beat: n.beat, ops: srv.edits.slice(before).filter(e => /^position /.test(e)) };
+  };
+  let c = await clickLive(8);
+  assert.deepEqual(c.ops, [], 'no playhead move while playing');
+  await page.keyboard.press('Space');
+  await page.waitForFunction(() => !SV.state.playing, { timeout: 3000 });
+  c = await clickLive(12);
+  assert.deepEqual(c.ops, ['position ' + c.beat], 'note click while stopped moves the playhead to the note');
+  await clickIn(page, '#svpbCue');
+  c = await clickLive(16);
+  assert.deepEqual(c.ops, [], 'option off: no playhead move');
+  await clickIn(page, '#svpbCue');
   await page.waitForFunction(() => document.getElementById('svpbLoop').classList.contains('on'), { timeout: 2000 });
   await page.screenshot({ path: 'build/out-playback-clip.png' });
   await page.keyboard.down('Shift'); await page.keyboard.press('L'); await page.keyboard.up('Shift');
@@ -98,7 +122,9 @@ await withPage({ port: PORT + 1, mode: 'score' }, async ({ page, srv, errors }) 
   assert.equal(await page.evaluate(() => SV.state.base.markers.length), 15);
   await page.evaluate(() => { SV.togglePin(SV.state.base.parts[0].name); SV.togglePin(SV.state.base.parts[2].name); });
 
-  // "Clip bars" range: bars 25-49 of the arrangement are rendered (measureOffset 24).
+  // Clip view with pinned tracks: the selected clip's bars, 25-49 of the arrangement (measureOffset 24).
+  await page.click('#modeSeg button[data-mode=clip]');
+  assert.equal(await page.evaluate(() => SV.state.mode + '/' + SV.state.range + '/' + SV.state.trackMode), 'score/clip/pinned', 'Clip view with pins');
   await page.waitForFunction(() => SV.state.render && SV.state.render.measureOffset === 24 && document.querySelector('#m30 > g.mNum'), { timeout: 20000 });
   assert.deepEqual(await rehBars(page), [{ bar: 26, text: 'A`' }, { bar: 41, text: 'B' }, { bar: 49, text: "B'" }]);
   await clickBarNumber(page, 30);
@@ -116,9 +142,9 @@ await withPage({ port: PORT + 1, mode: 'score' }, async ({ page, srv, errors }) 
   await page.waitForFunction(() => document.querySelectorAll('#paper g.reh').length === 2, { timeout: 5000 });
   assert.deepEqual(await rehBars(page), [{ bar: 26, text: 'Verse' }, { bar: 34, text: 'Chorus' }]);
 
-  // Whole song: bar numbers are arranger bars from 1.
+  // Score view, the whole song: bar numbers are arranger bars from 1.
   srv.setMarkers([]);
-  await page.click('#rangeSeg button[data-range=all]');
+  await page.click('#modeSeg button[data-mode=score]');
   await page.waitForFunction(() => SV.state.render && SV.state.render.measureOffset === 0 && document.querySelector('#m18 > g.mNum'), { timeout: 20000 });
   assert.equal((await rehBars(page)).length, 14, 'all export markers before the end (beat 512 is the end)');
   await clickBarNumber(page, 18);

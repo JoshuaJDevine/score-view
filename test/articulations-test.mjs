@@ -206,6 +206,22 @@ await test('nothing to do when the articulation is already active; the first not
   const n2 = [L(0, 60), L(24, 62)];
   assert.deepEqual(A.planWriteBack(n2, 24, new Set([id(n2[0])]), 0, STR), ['add 0 0 0 100 0.25']);
 });
+await test('keyswitch timing: never on the note; the clip\'s first note is late; fixing moves switches off their notes', () => {
+  // the slot: an eighth before, after the previous note (+ tolerance), squeezed to one step before
+  assert.deepEqual(A.keyswitchSlot(24, 0, 24), { x: 21, late: false });
+  assert.deepEqual(A.keyswitchSlot(24, 21, 24), { x: 23, late: false });
+  assert.deepEqual(A.keyswitchSlot(0, null, 24), { x: 0, late: true }, 'clip start: no room');
+  assert.deepEqual(A.keyswitchSlot(96, null, 24, 96), { x: 96, late: true }, 'first played step (trimmed clip)');
+  const report = {};
+  A.planWriteBack([L(0, 60), L(24, 62)], 24, new Set(['L0_0_60']), 6, STR, 'from', { report });
+  assert.equal(report.late, true);
+  // late detection: a switch on (or just after) its note that changes the articulation
+  const late = A.lateKeyswitches([note(0, 1, 60), note(1, 1, 62), note(2, 1, 64)], [ks(-1, 0), ks(1, 6), ks(2, 6)], STR);
+  assert.deepEqual(late.map(l => l.note.start), [1], 'the pizz at 1 is late; the repeat at 2 changes nothing');
+  // fix: moves the switch at 24 (on its note) to 21; the one on the clip's first note cannot move
+  const fix = A.planKeyswitchFix([L(0, 0), L(0, 60), L(24, 6), L(24, 62)], 24, STR);
+  assert.deepEqual(fix, { ops: ['move 0 24 6 -3 0'], stuck: 1 });
+});
 await test('intent shortcuts pick (and cycle) articulations from the table', () => {
   assert.equal(STR[A.keyForIntent(STR, 'short')], 'Short Staccato');
   assert.equal(STR[A.keyForIntent(STR, 'short', [5])], 'Short Spiccato');
@@ -252,17 +268,23 @@ await test('overrides (localStorage) win over the export table', () => {
   assert.equal(SV.articulations.mapFor('Viola').source, 'BBC Symphony Orchestra: Core - Violas');
 });
 await test('strings, bars 80-88: legato slurs, spicc./pizz./arco only at changes, wedges/tenuto/marcato in bassoons', () => {
-  const SV = loadModules({ base });
+  const SV = loadModules({ base, settings: { slurLegato: true } });
   const s = transform(SV, scoreFor(base, ['Violin 1', 'Cello', 'Basoons a3'], 79, 9));
   const [vln, vc, bsn] = s.parts;
-  assert.deepEqual(vln.marks.filter(m => m.kind === 'dir').map(m => m.text), ['pizz.', 'arco']);
-  assert.deepEqual(vc.marks.filter(m => m.kind === 'dir').map(m => m.text), ['spicc.', 'pizz.', 'arco', 'spicc.']);
+  assert.deepEqual(vln.marks.filter(m => m.kind === 'dir' && !m.late).map(m => m.text), ['pizz.', 'arco']);
+  assert.deepEqual(vc.marks.filter(m => m.kind === 'dir' && !m.late).map(m => m.text), ['spicc.', 'pizz.', 'arco', 'spicc.']);
+  // the cello's spiccato keyswitch at beat 339.04 comes after its note (339): it cannot fire for it
+  assert.deepEqual(vc.marks.filter(m => m.late).map(m => m.beat), [339 - 79 * 4]); // score beats start at bar 80
   assert.ok(vln.slurs.length >= 3 && vc.slurs.length >= 3);
   const artics = bsn.notes.map(n => n.artic).filter(Boolean);
   ['stacciss', 'ten', 'marc'].forEach(a => assert.ok(artics.includes(a), a));
   assert.ok(vln.marks.some(m => m.kind === 'dynam' && m.text === 'f'), 'Violin 1 dynamics from automation');
   const { mei } = ScoreBuilder.buildMEI(s, { grid: 2, simplify: true });
   assert.ok((mei.match(/<slur /g) || []).length >= 9);
+});
+await test('legato passages get no slurs unless "Slur legato passages" is on', () => {
+  const s = transform(loadModules({ base }), scoreFor(base, ['Violin 1', 'Cello'], 79, 9));
+  assert.ok(s.parts.every(p => !(p.slurs || []).length), 'no automatic slurs by default');
 });
 await test('trumpet bars 6-9: staccatissimo wedges and marcato; the keyswitches are not engraved', () => {
   const SV = loadModules({ base });
@@ -288,11 +310,13 @@ await test('articulations, tremolo, trills, slurs, technique text, dynamics and 
     note(8, 1, 72, { artic: 'snap' }), note(9, 1, 72, { artic: 'harm' })];
   const score = { title: 't', timeSig: { num: 4, den: 4 }, keyFifths: 0, lengthBeats: 12,
     parts: [{ name: 'Violin', notes, slurs: [{ start: notes[5].id, end: notes[7].id }],
-      marks: [{ beat: 0, text: 'pizz.', kind: 'dir' }, { beat: 0, text: 'p', kind: 'dynam' }, { beat: 8, text: 'f', kind: 'dynam' }],
+      marks: [{ beat: 0, text: 'pizz.', kind: 'dir' }, { beat: 0, text: 'p', kind: 'dynam' }, { beat: 8, text: 'f', kind: 'dynam' },
+        { beat: 4, text: '⚠ ks', kind: 'dir', late: true }],
       hairpins: [{ start: 4, end: 8, form: 'cres' }] }] };
   const built = ScoreBuilder.buildMEI(score, { grid: 2 });
   const { xml } = MX.fromMEI(built.mei, { DOMParser, score, staves: built.staves, date: '2026-01-01' });
   fs.writeFileSync(path.join(ROOT, 'test/out-mx-articulations.musicxml'), xml);
+  assert.ok(!xml.includes('⚠'), 'Score View warnings stay out of the export');
   for (const s of ['<staccato/>', '<staccatissimo/>', '<strong-accent/>', '<tenuto/>', '<tremolo type="single">3</tremolo>', '<trill-mark/>',
     '<slur type="start"', '<slur type="stop"', '<snap-pizzicato/>', '<harmonic/>', '<words font-style="italic">pizz.</words>',
     '<dynamics><p/></dynamics>', '<dynamics><f/></dynamics>', '<wedge type="crescendo"/>', '<wedge type="stop"/>']) assert.ok(xml.includes(s), s);

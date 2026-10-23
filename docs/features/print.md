@@ -12,7 +12,8 @@ these pages. Ctrl+P.
 - `SV.print` (`open()`, `build()`). localStorage `scoreview.print.*`.
 
 ## Hooks
-`buildOptions`, `keydown`. Uses `SV.scoreModel()`; reads `SV.musicxml`, `SV.instruments`.
+`buildOptions`, `keydown`. Uses `SV.scoreModel()`; reads `SV.musicxml`, `SV.instruments`. Each page's glyph `<use>`s
+are inlined like the paper's (`window.SvgInline`, web/core/svg-inline.js).
 
 ## Tests
 `test/print-e2e.mjs` (whole score, a part, Letter landscape, PDF page count); theme-e2e checks the print view stays

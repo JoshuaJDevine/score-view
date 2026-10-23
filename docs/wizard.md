@@ -21,16 +21,18 @@ Files:
 1. Click **New Score…** in the feature toolbar.
 2. Pick a template and click **Load**, or click **Browse ideas…**: categories on the left, templates in the middle, and
    on the right the template's **starter brief** (tempo, meter, key, the form with bar numbers, a compositional prompt)
-   and its tracks with the library and the patch to load in each. **Load this template** fills the list. The
-   **Essentials** are Classical orchestra (BBC SO Core section names), Chamber strings, Film orchestra, String quartet
-   and SATB choir + piano; the 24 starter templates are listed below.
+   and its tracks with the library and the patch to load in each. **Load this template** fills the list. There are
+   10 templates in three sections, each with a starter brief (listed below).
 3. Edit the list:
    * rename, regroup or recolour rows, reorder them with ▲▼, add or remove rows;
    * choose the **Notation** instrument (the `instruments.js` id; *Automatic* = guess from the name);
    * click **Library** to open the palette. It lists the installed instrument plug-ins grouped by vendor, plus your
      Bitwig library presets, and can be filtered;
    * choose an **Articulation map** (one of the "Note FX Layer" presets). The list is kept as a draft in
-     localStorage;
+     localStorage. **BBC SO articulations** (above the list, saved): *Keyswitch notes (Score View)* — the default;
+     templates add no map, articulations live in the clip as latching keyswitch notes that Score View reads and writes —
+     or *Articulation map (Note FX)*: templates add their map, which picks the articulation from its selector and
+     re-sends it before every note (keyswitch notes in the clip then last one note);
    * edit the **Patch to load inside it** hint (free text; it goes into the summary and the starter sheet).
 4. **Create in Bitwig…** shows a confirmation that names what will change. For a starter template it also offers
    **Set tempo & meter** (e.g. 150 BPM, 4/4) and **Add section markers** (one named arranger cue marker per form
@@ -46,25 +48,28 @@ Files:
 7. Per staff: click a staff name, then **Swap library…**, then pick a plug-in. You choose either "Keep the old
    instrument, disabled" (the default) or "Replace it".
 
-## Starter templates (24)
+## Templates (10)
 
-Each has a category, a one-line note, a brief (`{tempo, meter:[n,d], key, form:[[section, bars]], prompt}`) and 3–10
+**2026-10-18: "fewer, better".** The list was cut from 29 (5 Essentials + 24 starters) to 10 the user would really
+start from; every one has a brief now. Kept: the ones that load ready to play (BBC SO, Super Audio Cart NES/SNES) and
+two distinct modern palettes. The 19 retired starters are kept verbatim in `docs/archive/wizard-templates-retired.js`
+(not loaded); one comes back by pasting it into `STARTERS` and harvesting its presets so it loads ready to play.
+
+Each has a category, a one-line note, a brief (`{tempo, meter:[n,d], key, form:[[section, bars]], prompt}`) and
 rows with a patch hint (`patch`: string, or `{[plug-in]: hint, '*': fallback}`). Hints name real snapshots, folders and
 presets listed on the user's drives (Super Audio Cart `F:\VST\Super Audio Cart` + SAC2 Beta N64 bank, The Orchestra
 Complete 4 snapshots, Opus instrument folders on `E:\VST` / `F:\VST\EastWest`, Spitfire `.zpreset` names under
 `C:\Spitfire` / `F:\VST\Spitfire`, Arturia factory presets in `C:\ProgramData\Arturia\Presets`, Serum 2 factory presets,
-NI Kontakt library folders). All 24 resolve to their first-choice plug-in in `wizard-plugins.js` (tested).
+NI Kontakt library folders). All resolve to their first-choice plug-in in `wizard-plugins.js` (tested).
 
-| Category | Templates |
-|---|---|
-| Retro & Chiptune | NES 2A03 stage theme · SNES Mode 7 adventure · N64 soundfont platformer · Cozy RPG village |
-| Lo-fi & Chill | Lo-fi study beats · Background piano café trio · Tape & VHS daydream |
-| Synth worlds | Serum synthwave night drive · Analog synth orchestra · Berlin School sequencers |
-| Cinematic | The Orchestra: animated fantasy · Hollywood Fantasy quest · Northern saga · Abbey Road main title |
-| Hybrid | Hybrid trailer in three acts · Minimalist machine (Glass / Reich) |
-| Chamber & intimate | Home-recorded indie film · Neo-classical felt & cello · Berlin Free Orchestra pastoral · Cathedral at dusk |
-| World & texture | Gamelan & hammered metals · Forest folk dance in 7/8 · Toy shop at midnight |
-| Pop & groove | UJAM band in a box |
+| Section | Templates | Loads ready to play? |
+|---|---|---|
+| Orchestral & choral | Classical orchestra · Chamber strings · Film orchestra · String quartet · SATB choir + piano | BBC SO rows yes (harvested presets); SATB (Whitacre, Piano V3) no presets yet |
+| Retro & chiptune | NES 2A03 stage theme · SNES Mode 7 adventure · N64 soundfont platformer | NES / SNES yes; N64 (SAC2) no harvested state yet |
+| Film & modern | Hybrid trailer in three acts · Neo-classical felt & cello | no: the plug-ins open empty, patch from the hint |
+
+To make SATB and N64 load ready to play: export a Bitwig project that has those instruments set up (Whitacre per voice,
+Piano V3, the SAC2 N64 patches) as DAWproject and run `node tools/harvest-presets.mjs "<export>.dawproject"`.
 
 **Patch presets.** A row may name the exact patch for its host (`preset: {[plug-in]: patch}`; BBC SO rows via `bbc()`,
 Super Audio Cart rows via `SACROW` → Kontakt 8 "Super Audio Cart"). When `web/features/wizard-presets.js` (generated by
@@ -106,6 +111,7 @@ on. A failed track creation stops the job, and then the final rename pass still 
 * `GET /api/wizard` returns:
   `{ state: idle|queued|running|done|error|cancelled, kind: create|swap, message, step, steps,
      tracks:[{name, group, created, grouped, groupMsg, devices:[{ok, text}]}], groups:[{name, ok, msg}], errors:[], notes:[] }`.
+* `POST /api/wizard?skipGroups`: stop waiting for Bitwig's focus (see Limitations).
 * `GET /api/wizard?caps` returns `{ groupAction:{id,name}|null, headerFocus, bank, tracks }`. Use it to check the live
   Bitwig's actions before running anything.
 
@@ -139,8 +145,16 @@ tolerates one typo (the user's file is "BBCSO Basoon").
 ## Limitations
 
 * Patches inside plug-ins cannot be chosen (see above). The user picks them, or saves presets for the palette.
-* Grouping depends on Bitwig's "Group" action behaving on a single selected track. This is verified each time; if it
-  fails, the tracks stay ungrouped and the summary says so. Nested groups are not created.
+* Grouping depends on Bitwig's "Group" action acting on the multi-selected tracks in the track header area. The job
+  order is: create every track → group each section → insert devices (a plug-in loading a big patch, e.g. a BBC SO
+  preset, opens its window late and takes the focus Group needs; with devices first, four BBC SO tracks stayed
+  ungrouped on 2026-10-18). **Group only acts while Bitwig's window has the keyboard focus** (no API call makes a
+  group): clicking Yes in Score View's window leaves Chrome in front. A failed try therefore waits for the user:
+  `/api/wizard` reports `waitFocus` (the group's name), the dialog shows "Click Bitwig's window … Skip grouping",
+  and the job tries again (re-selecting the tracks) every ~1.5 s until the group is there, Skip (`POST
+  /api/wizard?skipGroups`) or 60 s; later groups in the same job then get one try each. A try never groups twice
+  (a late group is checked first, so no nested groups). If grouping is given up, the tracks stay ungrouped and the
+  summary says so (select them, Ctrl+G). Nested groups are not created.
 * The wizard sees the first 256 flat tracks. A project bigger than that is refused.
 * While the job runs, Bitwig's track selection moves, and every change is a separate undo step.
 * Swap library finds the track by the flat index in `/api/notes` and checks its name. Tracks in collapsed groups are

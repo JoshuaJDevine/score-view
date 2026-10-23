@@ -4,9 +4,11 @@
 // a "file:" device whose path contains "MISSING" is "file not found", w.groupAction = false (srv.wizard.groupAction)
 // leaves groups unavailable. Starter settings (option tempo= / meter=, marker lines) change the mock's tempo
 // (play.tempo), meter (data.num/den) and cue markers (data.markers); w.playing = true makes markers skip.
+// w.focus = false: Bitwig is not in front, so Group cannot act: the job waits (status waitFocus = the group) and retries
+// until w.focus is true again or POST /api/wizard?skipGroups (NewScoreWizard.groupAttempt).
 export function createMockWizard({ data, play = {}, bump, stepMs = 15, groupAction = true } = {}) {
   const w = { stepMs, groupAction, state: 'idle', kind: '', message: '', step: 0, steps: 0, tracks: [], groups: [], errors: [], notes: [],
-              settings: [], plans: [], swaps: [], cancel: false, timer: null, playing: false };
+              settings: [], plans: [], swaps: [], cancel: false, timer: null, playing: false, focus: true, skipGroups: false, waitFocus: '' };
 
   const fields = line => {
     const out = {};
@@ -30,7 +32,7 @@ export function createMockWizard({ data, play = {}, bump, stepMs = 15, groupActi
   }
 
   function status() {
-    return { state: w.state, kind: w.kind, message: w.message, step: w.step, steps: w.steps,
+    return { state: w.state, kind: w.kind, message: w.message, step: w.step, steps: w.steps, waitFocus: w.waitFocus,
              tracks: w.tracks.map(({ name, group, created, grouped, groupMsg, devices }) => ({ name, group, created, grouped, groupMsg, devices })),
              groups: w.groups.map(({ name, ok, msg }) => ({ name, ok, msg })), settings: w.settings, errors: w.errors, notes: w.notes };
   }
@@ -65,7 +67,7 @@ export function createMockWizard({ data, play = {}, bump, stepMs = 15, groupActi
   }
 
   function start(plan) {
-    Object.assign(w, { state: 'running', message: 'Starting', step: 0, steps: 0, tracks: [], groups: [], settings: [], errors: [], notes: [], cancel: false });
+    Object.assign(w, { state: 'running', message: 'Starting', step: 0, steps: 0, tracks: [], groups: [], settings: [], errors: [], notes: [], cancel: false, skipGroups: false, waitFocus: '' });
     w.plans.push(plan);
     const queue = [];
     const lines = plan.split('\n').filter(l => l.trim());
@@ -96,14 +98,21 @@ export function createMockWizard({ data, play = {}, bump, stepMs = 15, groupActi
           w.groups.push(run);
           const g = run;
           queue.push(['Creating track ' + t.name, () => { addTrack(t.name); t.created = true; }]);
-          queue.push(['Grouping ' + g.name, () => {
+          const grouping = ['Grouping ' + g.name, () => {
             if (!w.groupAction) { g.msg = 'Bitwig\'s "Group" action was not found; tracks left ungrouped.'; t.groupMsg = g.msg; return; }
+            if (!w.focus && w.skipGroups) {
+              g.msg = 'Grouping skipped; tracks left ungrouped (select them in Bitwig and press Ctrl+G).'; t.groupMsg = g.msg;
+              w.errors.push(g.name + ': ' + g.msg); w.waitFocus = ''; return;
+            }
+            if (!w.focus) { w.waitFocus = g.name; queue.unshift(grouping); return; } // waits for a click into Bitwig
+            w.waitFocus = '';
             g.ok = true; t.grouped = true;
             const tr = data.tracks.find(x => x.name === t.name);
             data.tracks.splice(data.tracks.indexOf(tr), 0, { name: g.name, index: -1, group: true, sel: false, solo: false, mute: false });
             data.tracks.forEach((x, i) => { x.index = i; });
             bump();
-          }]);
+          }];
+          queue.push(grouping);
         } else {
           const g = t.group ? run : null;
           queue.push(['Creating track ' + t.name, () => { addTrack(t.name); t.created = true; }]);
@@ -148,6 +157,7 @@ export function createMockWizard({ data, play = {}, bump, stepMs = 15, groupActi
       req.on('data', c => body += c);
       req.on('end', () => {
         if (url.searchParams.has('cancel')) { w.cancel = true; return json({ ok: true }); }
+        if (url.searchParams.has('skipGroups')) { w.skipGroups = true; return json({ ok: true }); }
         if (w.state === 'running') return json({ ok: false, error: 'A wizard job is already running.' });
         start(body);
         json({ ok: true });

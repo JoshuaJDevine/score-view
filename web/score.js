@@ -240,6 +240,10 @@
   // fits random timing too easily), and how much better than straight a tuplet reading must fit before it is
   // used: straight music must never turn into triplets by accident.
   const TUP_PENALTY = 1.5, TUP_RATIO = 0.7;
+  // Score intent (buildMEI opts.interpret): an onset snaps to a level when within this fraction of it, an end
+  // within INTENT_END (lengths are looser than onsets in a sampler performance), moving less than INTENT_GAP of its
+  // gap to the neighbouring onsets; onsets within CHORD_TOL ticks are one onset.
+  const INTENT_ON = 0.3, INTENT_END = 0.4, INTENT_GAP = 0.5, CHORD_TOL = TQ / 10;
 
   // Chooses how one analysis window (a beat) is subdivided. pts: [{t (ticks from window start), w}].
   // Returns sub-ranges [{a, b, q, tup}] (relative ticks; q = quantum; tup = written as a 3:2 tuplet).
@@ -311,8 +315,9 @@
    *          tempoChanges?:[{beat, bpm, endBeat? (gradual)}], offsetBeats? (absolute beat of the first measure) }
    *          (start/dur/beat in quarter-note beats from the first rendered measure;
    *           pickupBeats > 0 makes the first measure an incomplete bar of that many beats)
-   * opts:  { grid: grid units (TPQ = 8: 1 = 32nd, 2 = 16th, 4 = 8th), simplify, tuplets: 'auto'|'off',
-   *          measureOverrides: { [measureNumber]: { grid, tuplets: 'auto'|'off'|'triplet', voices: 'auto'|'single', simplify } },
+   * opts:  { grid: grid units (TPQ = 8: 1 = 32nd, 2 = 16th, 4 = 8th), simplify, interpret (default true: score
+   *          intent, see interpret()), tuplets: 'auto'|'off',
+   *          measureOverrides: { [measureNumber]: { grid, tuplets: 'auto'|'off'|'triplet', voices: 'auto'|'single', simplify, interpret } },
    *          clefChanges (default true), ottava (default true) }
    * returns { mei, keyFifths, timeline:[{svgId, srcId, start, end}], measureBeats (first meter), measures, measureOffset,
    *           staves:[{n, part, clef, fifths, transpose, clefs:[{beat, clef}], ottavas:[{start, end, shift}]}],
@@ -368,7 +373,8 @@
       const n = m + 1 + mOff, partOv = score.parts[pi].measureOverrides || {};
       const o = Object.assign({}, globalOv[n], partOv[n]), mi = lay.info(m);
       s = { q: Math.min(mi.W, Math.max(1, o.grid || baseGrid) * G), tup: mi.U ? o.tuplets || baseTup : 'off',
-            single: o.voices === 'single', simplify: o.simplify != null ? !!o.simplify : !!opts.simplify };
+            single: o.voices === 'single', simplify: o.simplify != null ? !!o.simplify : !!opts.simplify,
+            intent: (o.interpret != null ? !!o.interpret : opts.interpret !== false) && !o.grid && !o.tuplets };
       cache.set(m, s);
       return s;
     }
@@ -376,6 +382,64 @@
     let maxTick = Math.max(M, Math.round((score.lengthBeats || 0) * TQ));
     const timeline = [];
     let tupletCount = 0;
+
+    // Score intent (opts.interpret, on by default): a sampler performance is read as the plainest rhythm it can mean.
+    // Latency and feel put notes a little early or late and lengths a little short or long, so each onset snaps to
+    // the coarsest level (beat, then half beat ...) within INTENT_ON of that level and INTENT_GAP of the gap to the
+    // neighbouring onsets (the rhythm's proportions stay), unless two separate onsets would then meet or swap: those
+    // step down to finer levels. Ends snap the same way (INTENT_END), never onto their
+    // start. What fits no level is left as played for the grid / tuplet reading below. A bar with an explicit
+    // reading (grid or tuplets override) or interpret: false is read as played.
+    function levelsOf(pi, m) {
+      const info = lay.info(m), q = settingsFor(pi, m).q, out = [];
+      for (let L = info.beat; L > q && L % 1 === 0; L = L === info.beat && info.compound ? L / 3 : L / 2) out.push(L);
+      return out;
+    }
+    function snapIntent(pi, t, from, tolF, above, lim = Infinity) {
+      const m = lay.of(t), s = settingsFor(pi, m);
+      if (!s.intent) return null;
+      const ms = lay.start(m), end = ms + lay.len(m), levels = levelsOf(pi, m);
+      // A point clearly nearer the triplet grid than the straight one is left to the tuplet reading.
+      const W = lay.info(m).W, off = d => { const x = (t - ms) % d; return Math.min(x, d - x); };
+      if (s.tup !== 'off' && Math.min(off(W / 3), W === TQ && s.q <= W / 4 ? off(W / 6) : Infinity) + 1 < off(s.q)) return null;
+      for (let i = from; i < levels.length; i++) {
+        const L = levels[i], p = Math.min(ms + Math.round((t - ms) / L) * L, end);
+        if (Math.abs(p - t) < Math.min(tolF * L, lim) && p > above) return { p, i };
+      }
+      return null;
+    }
+    function interpret(raw, pi) {
+      if (!raw.length) return raw;
+      raw.forEach(r => { r.rs0 = r.rs; r.re0 = r.re; });
+      // Onsets closer than CHORD_TOL are one onset (a chord, a roll).
+      const sorted = raw.slice().sort((a, b) => a.rs - b.rs), groups = [], groupOf = new Map();
+      sorted.forEach(r => {
+        let g = groups[groups.length - 1];
+        if (!g || r.rs - g.t > CHORD_TOL) groups.push(g = { t: r.rs, lvl: 0, hit: null });
+        groupOf.set(r, g);
+      });
+      // Where the plain grid would put an onset that fits no level (for the meet / swap check only).
+      const gridPos = t => { const m = lay.of(t), ms = lay.start(m), q = settingsFor(pi, m).q; return ms + Math.round((t - ms) / q) * q; };
+      for (let changed = true, guard = 0; changed && guard < 16; guard++) {
+        changed = false;
+        groups.forEach((g, i) => {
+          const gap = Math.min(i ? g.t - groups[i - 1].t : Infinity, i + 1 < groups.length ? groups[i + 1].t - g.t : Infinity);
+          g.hit = snapIntent(pi, g.t, g.lvl, INTENT_ON, -Infinity, gap * INTENT_GAP);
+          g.pos = g.hit ? g.hit.p : gridPos(g.t);
+        });
+        for (let i = 0; i + 1 < groups.length; i++) {
+          const a = groups[i], b = groups[i + 1];
+          if (a.pos < b.pos) continue;
+          [a, b].forEach(g => { if (g.hit) { g.lvl = g.hit.i + 1; changed = true; } });
+        }
+      }
+      return raw.map(r => {
+        const g = groupOf.get(r);
+        const rs = g.hit ? g.hit.p : r.rs;
+        const e = snapIntent(pi, r.re, 0, INTENT_END, rs);
+        return { n: r.n, rs, re: e ? e.p : Math.max(r.re, rs + 1), rs0: r.rs, re0: r.re };
+      });
+    }
 
     // Quantizes one part: decide each beat's subdivision (straight or tuplet), then snap note edges to it.
     function quantizePart(part, pi) {
@@ -390,11 +454,13 @@
         }
         return w;
       };
-      const raw = part.notes.map(n => ({ n, rs: n.start * TQ, re: (n.start + n.dur) * TQ }));
-      raw.forEach(r => {
-        winAt(r.rs).pts.push(r.rs, 1);
-        const we = winAt(r.re);
-        we.pts.push(r.re, r.re - r.rs <= we.W ? 0.5 : 0.25);
+      const raw = interpret(part.notes.map(n => ({ n, rs: n.start * TQ, re: (n.start + n.dur) * TQ })), pi);
+      // Each beat's subdivision is decided from the notes as played (rs0/re0): snapped points sit on both grids and
+      // would no longer speak for a straight reading.
+      raw.forEach(({ rs0, re0 }) => {
+        winAt(rs0).pts.push(rs0, 1);
+        const we = winAt(re0);
+        we.pts.push(re0, re0 - rs0 <= we.W ? 0.5 : 0.25);
       });
       const planOf = w => {
         if (w.plan) return w.plan;
@@ -418,7 +484,9 @@
       };
       const tr = part.transpose || 0;
       const qn = [];
-      raw.forEach(({ n, rs, re }) => {
+      raw.forEach(({ n, rs0, re0, ...r }) => {
+        // Inside a beat read as a tuplet the notes keep their played edges (the score-intent levels are straight).
+        const rs = subAt(rs0).tup ? rs0 : r.rs, re = subAt(re0).tup || subAt(Math.max(rs, re0 - 1)).tup ? re0 : r.re;
         const s = Q(rs);
         if (s < 0) return;
         let e = Q(re);
@@ -691,6 +759,7 @@
     // Layers -> per-measure pieces with ties. A tuplet region applies to a layer only where the layer has an
     // event boundary inside it (a note held under a triplet figure stays a plain value).
     const noteAt = new Map(); // src id -> { staff, n, first: {m, id, pos}, last: {m, id, pos} } (slurs, trills)
+    const barTies = [];       // { staff, m, m2, notes, k }: tied piece k in measure m continues in measure m2
     staves.forEach(st => {
       st.measures = Array.from({ length: nMeasures }, () => []);
       st.layers.forEach((L, li) => {
@@ -745,6 +814,10 @@
             perMeasure[p.m].push(p);
           });
           if (seg.kind === 'chord' && pieces.length) {
+            // Ties across a bar line, for chunked engraving (chunks.mei: a chunk boundary between them).
+            for (let k = 0; k + 1 < pieces.length; k++) {
+              if (pieces[k + 1].m !== pieces[k].m) barTies.push({ staff: st.n, m: pieces[k].m, m2: pieces[k + 1].m, notes: seg.chord.notes, k });
+            }
             const a = pieces[0], z = pieces[pieces.length - 1];
             seg.chord.notes.forEach(n => noteAt.set(n.id, {
               staff: st.n, n, first: { m: a.m, id: 'n' + safeId(n.id), pos: a.pos },
@@ -763,8 +836,8 @@
       for (let x = m; x < nMeasures; x++) keyAt[x] = k.fifths;
     });
 
-    // Emit MEI.
-    const keySig = fifths === 0 ? '0' : Math.abs(fifths) + (fifths > 0 ? 's' : 'f');
+    // Emit MEI. The scoreDef, each bar and the control events are kept apart so that chunks.mei() can assemble any run of
+    // whole bars as a document of its own (chunked engraving, core/chunks.js); the full document is the run of all bars.
     const dirsByMeasure = new Map();
     (score.directions || []).forEach(d => {
       const tick = Math.round(d.beat * TQ);
@@ -773,46 +846,62 @@
       if (!dirsByMeasure.has(m)) dirsByMeasure.set(m, []);
       dirsByMeasure.get(m).push({ ...d, tstamp: (tick - lay.start(m)) / lay.info(m).unit + 1 });
     });
+    // The end of bar m as a tstamp (its last beat + 1): where a spanner cut at a chunk's last bar line stops.
+    const barEnd = m => +(lay.len(m) / lay.info(m).unit + 1).toFixed(4);
+    const ctlEvents = [];
     const ctlByMeasure = controlEvents();
-    const out = [];
-    out.push('<?xml version="1.0" encoding="UTF-8"?>');
-    out.push('<mei xmlns="http://www.music-encoding.org/ns/mei" meiversion="5.0">');
-    out.push('<meiHead><fileDesc><titleStmt><title>' + esc(score.title || 'Score') + '</title></titleStmt><pubStmt/></fileDesc></meiHead>');
-    out.push('<music><body><mdiv><score>');
-    out.push(`<scoreDef keysig="${keySig}" meter.count="${lay.first.num}" meter.unit="${lay.first.den}">`);
-    // Parts with a `group` are bracketed per run of consecutive parts sharing it (barlines joined inside a
-    // bracket, labelled when score.groupLabels); without groups the whole score gets one bracket.
-    const grouped = partStaffs.some(ps => ps.part.group);
-    out.push(grouped ? '<staffGrp bar.thru="false">' : '<staffGrp symbol="bracket" bar.thru="false">');
     const sigOf = f => f === 0 ? '0' : Math.abs(f) + (f > 0 ? 's' : 'f');
     const clefAttrs = (c, pre) => `${pre}shape="${c.shape}" ${pre}line="${c.line}"` +
       (c.dis ? ` ${pre}dis="${c.dis}" ${pre}dis.place="${c.disPlace || 'above'}"` : '');
-    const staffDef = (st, label) =>
-      `<staffDef n="${st.n}" lines="5" ${clefAttrs(st.clef, 'clef.')}` +
-      (st.fifths !== fifths ? ` keysig="${sigOf(st.fifths)}"` : '') + '>' +
-      (label ? `<label>${esc(label)}</label><labelAbbr>${esc(st.part.abbr || abbr(label))}</labelAbbr>` : '') + '</staffDef>';
-    const partDef = ({ part, idxs }) => {
-      const label = part.label || part.name;
-      if (idxs.length > 1) {
-        out.push(`<staffGrp symbol="brace" bar.thru="true"><label>${esc(label)}</label><labelAbbr>${esc(part.abbr || abbr(label))}</labelAbbr>`);
-        idxs.forEach(i => out.push(staffDef(staves[i - 1], '')));
-        out.push('</staffGrp>');
-      } else out.push(staffDef(staves[idxs[0] - 1], label));
-    };
-    for (let i = 0; i < partStaffs.length;) {
-      const g = partStaffs[i].part.group;
-      let j = i + 1;
-      while (g && j < partStaffs.length && partStaffs[j].part.group === g) j++;
-      const run = partStaffs.slice(i, j);
-      if (g && run.length > 1) {
-        out.push('<staffGrp symbol="bracket" bar.thru="true">' +
-          (score.groupLabels ? `<label><rend fontstyle="italic" fontweight="bold">${esc(g)}</rend></label><labelAbbr><rend fontstyle="italic" fontweight="bold">${esc(abbr(g))}</rend></labelAbbr>` : ''));
-        run.forEach(partDef);
-        out.push('</staffGrp>');
-      } else run.forEach(partDef);
-      i = j;
+    // Parts with a `group` are bracketed per run of consecutive parts sharing it (barlines joined inside a
+    // bracket, labelled when score.groupLabels); without groups the whole score gets one bracket.
+    const grouped = partStaffs.some(ps => ps.part.group);
+    // The scoreDef at bar m0: the clefs, keys and meter in force there. abbr: the short names as the labels (a chunk
+    // after the first starts a later system, where the full score shows the short names); hide: staff numbers left out.
+    function header(m0, abbrOnly, hide) {
+      const h = [];
+      const concert = m0 ? keyAt[m0] : fifths, mi = m0 ? lay.info(m0) : lay.first, t0 = lay.start(m0);
+      // a later system shows the time signature only where it changes
+      const meterVis = m0 && !(bars[m0].change && bars[m0].change.meterCh) ? ' meter.visible="false"' : '';
+      h.push(`<scoreDef keysig="${sigOf(concert)}" meter.count="${mi.num}" meter.unit="${mi.den}"${meterVis}>`);
+      h.push(grouped ? '<staffGrp bar.thru="false">' : '<staffGrp symbol="bracket" bar.thru="false">');
+      const clefOf = st => { let c = st.clefPlan[0].clef; st.clefPlan.forEach(p => { if (p.tick <= t0) c = p.clef; }); return c; };
+      const labels = (full, short) => `<label>${abbrOnly ? short : full}</label><labelAbbr>${short}</labelAbbr>`;
+      const staffDef = (st, label) => {
+        const own = m0 ? st.keyOf(concert) : st.fifths;
+        return `<staffDef n="${st.n}" lines="5" ${clefAttrs(m0 ? clefOf(st) : st.clef, 'clef.')}` +
+          (own !== concert ? ` keysig="${sigOf(own)}"` : '') + '>' +
+          (label ? labels(esc(label), esc(st.part.abbr || abbr(label))) : '') + '</staffDef>';
+      };
+      const shown = ({ idxs }) => !hide || idxs.some(i => !hide.has(i));
+      const partDef = ({ part, idxs }) => {
+        const label = part.label || part.name;
+        if (idxs.length > 1) {
+          h.push(`<staffGrp symbol="brace" bar.thru="true">` + labels(esc(label), esc(part.abbr || abbr(label))));
+          idxs.forEach(i => h.push(staffDef(staves[i - 1], '')));
+          h.push('</staffGrp>');
+        } else h.push(staffDef(staves[idxs[0] - 1], label));
+      };
+      for (let i = 0; i < partStaffs.length;) {
+        const g = partStaffs[i].part.group;
+        let j = i + 1;
+        while (g && j < partStaffs.length && partStaffs[j].part.group === g) j++;
+        const run = partStaffs.slice(i, j), vis = run.filter(shown);
+        if (g && run.length > 1 && vis.length) {
+          const rend = t => `<rend fontstyle="italic" fontweight="bold">${esc(t)}</rend>`;
+          h.push('<staffGrp symbol="bracket" bar.thru="true">' + (score.groupLabels ? labels(rend(g), rend(abbr(g))) : ''));
+          vis.forEach(partDef);
+          h.push('</staffGrp>');
+        } else vis.forEach(partDef);
+        i = j;
+      }
+      h.push('</staffGrp></scoreDef><section>');
+      return h;
     }
-    out.push('</staffGrp></scoreDef><section>');
+    const docHead = ['<?xml version="1.0" encoding="UTF-8"?>', '<mei xmlns="http://www.music-encoding.org/ns/mei" meiversion="5.0">',
+      '<meiHead><fileDesc><titleStmt><title>' + esc(score.title || 'Score') + '</title></titleStmt><pubStmt/></fileDesc></meiHead>',
+      '<music><body><mdiv><score>'];
+    const docTail = '</section></score></mdiv></body></music></mei>';
 
     const durAttrs = v => `dur="${DUR[v][0]}"` + (DUR[v][1] ? ` dots="${DUR[v][1]}"` : '');
     // Clef changes: at a bar line the new clef ends the previous bar (before the bar line); inside a bar it
@@ -826,23 +915,28 @@
       });
     });
     const meterChanges = [], keyChangesOut = [];
+    // Per bar: change = the meter / key change before it ({meterCh, keyCh} or null), open = the <measure> tag, staffXml =
+    // one string per staff, dirs = [{staff, xml}]; feat = what the bar's natural width depends on (onsets across the
+    // staves, the spacing they need, accidentals; core/chunks.js estimates system breaks from it).
+    const bars = [];
+    staves.forEach(st => { st.filled = new Uint8Array(nMeasures); }); // 1 = the staff has notes in that bar
     for (let m = 0; m < nMeasures; m++) {
       const ms = lay.start(m), mi = lay.info(m);
+      const bar = { change: null, open: '', staffXml: [], dirs: [], feat: null };
+      bars.push(bar);
       if (m > 0) {
         // Meter and key changes: a <scoreDef> before the measure (transposed / unkeyed staves get a staffDef).
         const pm = lay.info(m - 1), meterCh = mi.num !== pm.num || mi.den !== pm.den, keyCh = keyAt[m] !== keyAt[m - 1];
         if (meterCh) meterChanges.push({ measure: m + 1 + mOff, beat: (absOff + ms) / TQ, num: mi.num, den: mi.den });
         if (keyCh) keyChangesOut.push({ measure: m + 1 + mOff, beat: (absOff + ms) / TQ, fifths: keyAt[m] });
-        if (meterCh || keyCh) {
-          const own = keyCh ? staves.filter(st => st.keyOf(keyAt[m]) !== keyAt[m]) : [];
-          out.push('<scoreDef' + (meterCh ? ` meter.count="${mi.num}" meter.unit="${mi.den}"` : '') +
-            (keyCh ? ` keysig="${sigOf(keyAt[m])}"` : '') + (own.length ? '><staffGrp>' +
-            own.map(st => `<staffDef n="${st.n}" keysig="${sigOf(st.keyOf(keyAt[m]))}"/>`).join('') + '</staffGrp></scoreDef>' : '/>'));
-        }
+        if (meterCh || keyCh) bar.change = { meterCh, keyCh };
       }
-      out.push(`<measure n="${m + 1 + mOff}" xml:id="m${m + 1 + mOff}"` + (lay.len(m) !== mi.M ? ' metcon="false"' : '') +
-        `${m === nMeasures - 1 ? ' right="end"' : ''}>`);
+      bar.open = `<measure n="${m + 1 + mOff}" xml:id="m${m + 1 + mOff}"` + (lay.len(m) !== mi.M ? ' metcon="false"' : '') +
+        `${m === nMeasures - 1 ? ' right="end"' : ''}>`;
+      const onsets = new Map(); // tick in the bar -> accidentals there (the most on one staff)
       staves.forEach(st => {
+        const out = [];
+        bar.staffXml.push(out);
         // Accidentals are resolved in time order across all layers of the staff.
         const state = {};
         const { spell, kalt } = spellerFor(st.keyOf(keyAt[m]));
@@ -938,47 +1032,139 @@
           out.push(`<layer n="${li + 1}">` + items.join('') + '</layer>');
         });
         out.push('</staff>');
+        st.measures[m].forEach(ps => ps.forEach(p => {
+          if (p.kind === 'space' || p.whole) return;
+          const acc = p.kind === 'chord' ? p.spelled.filter(s => s.accid).length : 0;
+          onsets.set(p.pos, Math.max(onsets.get(p.pos) || 0, acc));
+        }));
+        if (all.length) st.filled[m] = 1;
       });
       (dirsByMeasure.get(m) || []).forEach(d => {
         const tag = d.kind === 'reh' ? 'reh' : d.kind === 'tempo' ? 'tempo' : 'dir';
-        out.push(`<${tag} staff="${d.staff || 1}" tstamp="${d.tstamp}" place="above">${esc(d.text)}</${tag}>`);
+        bar.dirs.push({ staff: d.staff || 1, top: true, xml: `<${tag} staff="${d.staff || 1}" tstamp="${d.tstamp}" place="above">${esc(d.text)}</${tag}>` });
       });
-      (ctlByMeasure.get(m) || []).forEach(x => out.push(x));
-      out.push('</measure>');
+      // Spacing: Verovio gives each gap between onsets about (gap in quarters)^0.6 of space.
+      const ticks = [...onsets.keys()].sort((a, b) => a - b);
+      let gaps = 0, acc = 0;
+      ticks.forEach((t, i) => { gaps += Math.pow(((i + 1 < ticks.length ? ticks[i + 1] : lay.len(m)) - t) / TQ, 0.6); acc += onsets.get(t); });
+      bar.feat = { onsets: ticks.length, gaps: +gaps.toFixed(3), acc, clefs: staves.filter(st => st.midClef.has(m) || st.endClef.has(m)).length };
     }
-    out.push('</section></score></mdiv></body></music></mei>');
 
-    // Per-part control events (articulation module): slurs, trills, dynamics, technique text, hairpins.
+    // Assembles bars a..b (0-based, inclusive) into one MEI document. Spanning control events cut by the range are cut
+    // the way a system break cuts them in a full render: a slur / hairpin / octave line / tie runs to the end of the
+    // last bar, and continues from the start of the first bar (tstamp 0); trill and tempo extenders stop at the edge.
+    // opts: abbr (short staff names), hide (Set of staff numbers to leave out: staves with nothing to play), system
+    // (a system break before the first bar).
+    function assemble(a, b, opts) {
+      const o = opts || {}, hide = o.hide && o.hide.size ? o.hide : null;
+      const full = a === 0 && b === nMeasures - 1;
+      const shownStaves = staves.filter(st => !hide || !hide.has(st.n));
+      const top = shownStaves.length ? shownStaves[0].n : 1;
+      // An event on a left-out staff is dropped, except the marks above the score (tempo, rehearsal, text on staff 1),
+      // which move to the top staff that is shown.
+      const place = ev => {
+        if (!hide || !hide.has(ev.staff)) return ev.xml;
+        return ev.top ? ev.xml.replace(/ staff="\d+"/, ` staff="${top}"`) : '';
+      };
+      const out = docHead.concat(header(a, !!o.abbr && a > 0, hide));
+      if (o.system) out.push('<sb/>'); // with Verovio's breaks 'encoded': exactly one system, justified to the width
+      const extra = new Map(); // bar -> cut events placed there
+      const addAt = (m, x) => { if (!x) return; if (!extra.has(m)) extra.set(m, []); extra.get(m).push(x); };
+      if (!full) {
+        ctlEvents.forEach(ev => {
+          if (ev.me == null || ev.m > b || ev.me < a || (ev.m >= a && ev.me <= b)) return;
+          addAt(Math.max(ev.m, a), place({ ...ev, xml: ev.cut(a, b) }));
+        });
+        barTies.forEach(t => {
+          if (t.m === b && t.m2 > b && t.m >= a) {
+            t.notes.forEach(n => addAt(b, place({ staff: t.staff, xml: `<tie staff="${t.staff}" startid="#n${safeId(n.id)}${t.k ? '-c' + t.k : ''}" tstamp2="0m+${barEnd(b)}"/>` })));
+          } else if (t.m2 === a && t.m < a) {
+            t.notes.forEach(n => addAt(a, place({ staff: t.staff, xml: `<tie staff="${t.staff}" tstamp="0" endid="#n${safeId(n.id)}-c${t.k + 1}"/>` })));
+          }
+        });
+      }
+      for (let m = a; m <= b; m++) {
+        const bar = bars[m], ch = bar.change;
+        if (ch && m > a) {
+          const own = ch.keyCh ? shownStaves.filter(st => st.keyOf(keyAt[m]) !== keyAt[m]) : [], mi = lay.info(m);
+          out.push('<scoreDef' + (ch.meterCh ? ` meter.count="${mi.num}" meter.unit="${mi.den}"` : '') +
+            (ch.keyCh ? ` keysig="${sigOf(keyAt[m])}"` : '') + (own.length ? '><staffGrp>' +
+            own.map(st => `<staffDef n="${st.n}" keysig="${sigOf(st.keyOf(keyAt[m]))}"/>`).join('') + '</staffGrp></scoreDef>' : '/>'));
+        }
+        out.push(bar.open);
+        staves.forEach((st, i) => { if (!hide || !hide.has(st.n)) out.push(...bar.staffXml[i]); });
+        bar.dirs.forEach(d => { const x = place(d); if (x) out.push(x); });
+        (ctlByMeasure.get(m) || []).forEach(ev => {
+          if (!full && ev.me != null && ev.me > b) return; // cut above
+          const x = place(ev);
+          if (x) out.push(x);
+        });
+        (extra.get(m) || []).forEach(x => out.push(x));
+        out.push('</measure>');
+      }
+      out.push(docTail);
+      return out.join('\n');
+    }
+
+    // Per-part control events (articulation module): slurs, trills, dynamics, technique text, hairpins; ottava lines and
+    // tempo marks. Each is { staff, xml, top? (a mark above the score) } in the map by its first bar; one that spans
+    // bars also has me (its last bar) and cut(a, b) (its piece inside bars a..b, see assemble) and is listed in ctlEvents.
     function controlEvents() {
       const ctl = new Map();
-      const add = (m, x) => { if (m < 0 || m >= nMeasures) return; if (!ctl.has(m)) ctl.set(m, []); ctl.get(m).push(x); };
+      const add = (m, staff, xml, span) => {
+        if (m < 0 || m >= nMeasures) return;
+        const ev = Object.assign({ staff, xml }, span);
+        if (!ctl.has(m)) ctl.set(m, []);
+        ctl.get(m).push(ev);
+        if (ev.me != null) { ev.m = m; ctlEvents.push(ev); }
+      };
       const ts = (tick, m) => +((tick - lay.start(m)) / lay.info(m).unit + 1).toFixed(4);
       // optional MEI id on marks and hairpins (features/dynamics.js finds its own in the SVG by id)
       const xmlId = id => (id && /^[A-Za-z_][\w.-]*$/.test(id) ? ` xml:id="${id}"` : '');
-      const tstamp2 = (tick, m0) => { const me = Math.min(lay.of(tick - 1), nMeasures - 1); return `${me - m0}m+${ts(tick, me)}`; };
+      const lastBar = tick => Math.min(lay.of(tick - 1), nMeasures - 1);
+      const tstamp2 = (tick, m0) => { const me = lastBar(tick); return `${me - m0}m+${ts(tick, me)}`; };
+      // A line between two notes (slur, ottava): cut at a chunk edge, it runs to the end of the last bar / from tstamp 0.
+      const idLine = (tag, staff, a, b, attrs) => add(a.first.m, staff,
+        `<${tag} staff="${staff}" startid="#${a.first.id}" endid="#${b.last.id}"${attrs}/>`, {
+          me: b.last.m,
+          cut: (x, y) => `<${tag} staff="${staff}" ` + (a.first.m >= x ? `startid="#${a.first.id}"` : 'tstamp="0"') + ' ' +
+            (b.last.m <= y ? `endid="#${b.last.id}"` : `tstamp2="${y - Math.max(a.first.m, x)}m+${barEnd(y)}"`) + attrs + '/>',
+        });
+      // An extender (trill, accel./rit.) only stops at the chunk's last bar line; the next chunk does not continue it.
+      const extender = (m, me, staff, xml, top) => add(m, staff, xml, {
+        me, top, cut: (x, y) => (m >= x ? xml.replace(/ tstamp2="[^"]*"/, ` tstamp2="${y - m}m+${barEnd(y)}"`) : ''),
+      });
       partStaffs.forEach(({ part, idxs }) => {
         const staff = idxs[0];
         (part.slurs || []).forEach(sl => {
           const a = noteAt.get(sl.start), b = noteAt.get(sl.end);
           if (!a || !b || a === b || a.staff !== b.staff) return;
-          add(a.first.m, `<slur staff="${a.staff}" startid="#${a.first.id}" endid="#${b.last.id}"/>`);
+          idLine('slur', a.staff, a, b, '');
         });
         (part.marks || []).forEach(mk => {
           const tick = Math.round(mk.beat * TQ);
           if (tick < 0 || !mk.text) return;
           const m = lay.of(tick);
-          if (mk.kind === 'dynam') add(m, `<dynam${xmlId(mk.id)} staff="${staff}" tstamp="${ts(tick, m)}" place="below">${esc(mk.text)}</dynam>`);
+          if (mk.kind === 'dynam') add(m, staff, `<dynam${xmlId(mk.id)} staff="${staff}" tstamp="${ts(tick, m)}" place="below">${esc(mk.text)}</dynam>`);
           else {
             const t = mk.italic === false ? esc(mk.text) : `<rend fontstyle="italic">${esc(mk.text)}</rend>`;
-            add(m, `<dir staff="${staff}" tstamp="${ts(tick, m)}" place="above">${t}</dir>`);
+            add(m, staff, `<dir staff="${staff}" tstamp="${ts(tick, m)}" place="above">${t}</dir>`);
           }
         });
         (part.hairpins || []).forEach(h => {
           const s = Math.round(h.start * TQ), e = Math.round(h.end * TQ);
           if (s < 0 || e <= s) return;
           const ms = lay.of(s), me = Math.min(lay.of(e - 1), nMeasures - 1);
-          add(ms, `<hairpin${xmlId(h.id)} form="${h.form === 'dim' ? 'dim' : 'cres'}" staff="${staff}" tstamp="${ts(s, ms)}" ` +
-                  `tstamp2="${me - ms}m+${ts(Math.min(e, lay.start(me) + lay.len(me)), me)}" place="below"/>`);
+          const form = `form="${h.form === 'dim' ? 'dim' : 'cres'}" staff="${staff}" `, end = ts(Math.min(e, lay.start(me) + lay.len(me)), me);
+          add(ms, staff, `<hairpin${xmlId(h.id)} ${form}tstamp="${ts(s, ms)}" tstamp2="${me - ms}m+${end}" place="below"/>`, {
+            me,
+            // the piece in the chunk that holds its start keeps the id (dynamics.js clicks it); continuations have none
+            cut: (x, y) => {
+              const p = Math.max(ms, x);
+              return `<hairpin${ms >= x ? xmlId(h.id) : ''} ${form}tstamp="${ms >= x ? ts(s, ms) : 0}" ` +
+                `tstamp2="${me <= y ? `${me - p}m+${end}` : `${y - p}m+${barEnd(y)}`}" place="below"/>`;
+            },
+          });
         });
       });
       noteAt.forEach(a => {
@@ -989,12 +1175,14 @@
         const alter = a.n.pitch + a.n.trill - natural;
         const accid = Math.abs(alter) <= 2 && alter !== kalt[up] ? ` accidupper="${ACCID[alter]}"` : '';
         // Long notes get a wavy extender to (nearly) the end of the note.
-        let ext = '';
+        let ext = '', me = null;
         if (a.n.e - a.n.s >= TQ * 2) {
-          const e = a.n.e - TQ / 4, me = Math.min(lay.of(e - 1), nMeasures - 1);
+          const e = a.n.e - TQ / 4;
+          me = lastBar(e);
           ext = ` extender="true" tstamp2="${me - a.first.m}m+${ts(e, me)}"`;
         }
-        add(a.first.m, `<trill staff="${a.staff}" startid="#${a.first.id}"` + ext + accid + '/>');
+        const xml = `<trill staff="${a.staff}" startid="#${a.first.id}"` + ext + accid + '/>';
+        if (me == null) add(a.first.m, a.staff, xml); else extender(a.first.m, me, a.staff, xml, false);
       });
       // Ottava lines: from the first note to the end of the last note of the span.
       staves.forEach(st => st.ottavas.forEach(o => {
@@ -1007,21 +1195,21 @@
         if (!a || !b) return;
         const dis = Math.abs(o.shift) === 2 ? 15 : 8;
         o.start = first.s; o.end = last.e;
-        add(a.first.m, `<octave staff="${st.n}" startid="#${a.first.id}" endid="#${b.last.id}" dis="${dis}" ` +
-                       `dis.place="${o.shift > 0 ? 'above' : 'below'}"/>`);
+        idLine('octave', st.n, a, b, ` dis="${dis}" dis.place="${o.shift > 0 ? 'above' : 'below'}"`);
       }));
       tempoMarks().forEach(t => {
         const m = lay.of(t.tick);
         if (m < 0 || m >= nMeasures) return;
         if (t.text) {
-          add(m, `<dir staff="1" tstamp="${ts(t.tick, m)}"` + (t.end > t.tick ? ` tstamp2="${tstamp2(t.end, m)}" extender="true" lform="dashed"` : '') +
-                 ` place="above"><rend fontstyle="italic">${esc(t.text)}</rend></dir>`);
+          const xml = `<dir staff="1" tstamp="${ts(t.tick, m)}"` + (t.end > t.tick ? ` tstamp2="${tstamp2(t.end, m)}" extender="true" lform="dashed"` : '') +
+            ` place="above"><rend fontstyle="italic">${esc(t.text)}</rend></dir>`;
+          if (t.end > t.tick) extender(m, lastBar(t.end), 1, xml, true); else add(m, 1, xml, { top: true });
           return;
         }
         const mi = lay.info(m), U = mi.compound ? ['♩.', 4, 1, 1.5] : mi.den === 2 ? ['𝅗𝅥', 2, 0, 2] : ['♩', 4, 0, 1];
         const v = Math.round(t.bpm / U[3]);
-        add(m, `<tempo staff="1" tstamp="${ts(t.tick, m)}" place="above" mm="${v}" mm.unit="${U[1]}"` + (U[2] ? ' mm.dots="1"' : '') +
-               ` midi.bpm="${Math.round(t.bpm * 100) / 100}">${U[0]} = ${v}</tempo>`);
+        add(m, 1, `<tempo staff="1" tstamp="${ts(t.tick, m)}" place="above" mm="${v}" mm.unit="${U[1]}"` + (U[2] ? ' mm.dots="1"' : '') +
+               ` midi.bpm="${Math.round(t.bpm * 100) / 100}">${U[0]} = ${v}</tempo>`, { top: true });
       });
       return ctl;
     }
@@ -1055,7 +1243,18 @@
     }
 
     const beatsOf = t => (absOff + t) / TQ;
-    return { mei: out.join('\n'), keyFifths: fifths, timeline, measureBeats: M / TQ, measures: nMeasures, measureOffset: mOff,
+    // For chunked engraving (core/chunks.js, core/render.js): bars a..b (0-based) as their own document, each bar's
+    // width features, the key signature's size per bar (the width a system start needs), which staves have notes in a
+    // run of bars.
+    const chunks = {
+      mei: assemble,
+      bars: bars.map(b => b.feat),
+      keyAcc: m => Math.abs(keyAt[m]),
+      parts: partStaffs.map(ps => ps.idxs.slice()),
+      labels: partStaffs.map(({ part }) => { const l = part.label || part.name || ''; return [l, part.abbr || abbr(l)]; }),
+      filled: (n, a, b) => staves[n - 1].filled.subarray(a, b + 1).some(Boolean),
+    };
+    return { mei: assemble(0, nMeasures - 1), chunks, keyFifths: fifths, timeline, measureBeats: M / TQ, measures: nMeasures, measureOffset: mOff,
              staves: staves.map(st => ({ n: st.n, part: st.part.name, clef: st.clef, fifths: st.fifths, transpose: st.part.transpose || 0,
                                         clefs: st.clefPlan.map(c => ({ beat: beatsOf(c.tick), clef: c.clef })),
                                         ottavas: st.ottavas.filter(o => o.end != null).map(o => ({ start: beatsOf(o.start), end: beatsOf(o.end), shift: o.shift })) })),

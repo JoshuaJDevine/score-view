@@ -4,7 +4,9 @@
 //  * every op of the table has a case in ScoreViewExtension.applyEdit (or is taken out on the HTTP thread), and no
 //    case exists outside the table;
 //  * EditOps.problem() and the mock's opProblem() agree; the mock really applies/refuses ops by the table;
-//  * the port-busy popup (D5) and the clip navigator's goto/gotoStay/gotoHome (test/java/NavigatorCheck, ~10 s).
+//  * the port-busy popup (D5) and the clip navigator's goto/gotoStay/gotoHome (test/java/NavigatorCheck, ~10 s);
+//  * /api/notes timing fields (settled, changedMs, selPlayStart) in notesJson and the mock, and LiveSync's
+//    versions-per-burst / settle windows on a fake clock (test/java/LiveSyncCheck).
 // Without javac the Java side is checked from the fixture only.
 //   node test/protocol-test.mjs           (node test/protocol-test.mjs --write regenerates test/fixtures/ops.txt)
 import assert from 'assert';
@@ -30,7 +32,8 @@ if (javac) {
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'sv-protocol-'));
   const srcs = fs.readdirSync(path.join(ROOT, 'src/claude/scoreview')).filter(f => f.endsWith('.java')).map(f => path.join(ROOT, 'src/claude/scoreview', f));
   execFileSync('javac', ['--release', '21', '-Xlint:-options', '-cp', cp, '-d', out, ...srcs,
-    path.join(ROOT, 'test/java/ProtocolCheck.java'), path.join(ROOT, 'test/java/NavigatorCheck.java')]);
+    path.join(ROOT, 'test/java/ProtocolCheck.java'), path.join(ROOT, 'test/java/NavigatorCheck.java'),
+    path.join(ROOT, 'test/java/LiveSyncCheck.java')]);
   const classpath = out + path.delimiter + cp;
   java = (cls, ...args) => execFileSync('java', ['-cp', classpath, 'claude.scoreview.' + cls, ...args], { encoding: 'utf8' });
   process.on('exit', () => fs.rmSync(out, { recursive: true, force: true }));
@@ -124,6 +127,42 @@ if (java) {
   assert.deepEqual(bad, [], 'NavigatorCheck:\n' + out);
   assert.match(out, /^done$/m);
   ok(`ClipNavigator (${out.split(/\r?\n/).filter(l => / ok$/.test(l)).length} checks)`);
+}
+
+// ---- /api/notes timing fields (LiveSync): the extension's notesJson and the mock send the same ones
+{
+  const TIMING = ['settled', 'changedMs', 'selPlayStart'];
+  const src = fs.readFileSync(path.join(ROOT, 'src/claude/scoreview/ScoreViewExtension.java'), 'utf8');
+  const body = src.slice(src.indexOf('private String notesJson()'), src.indexOf('private void handleMidi('));
+  const javaKeys = new Set([...body.matchAll(/sb\.append\(",\\"(\w+)\\":/g)].map(m => m[1])); // top-level fields
+  const EXTENSION_ONLY = ['project']; // the mock has no project (the page then keeps its score)
+  TIMING.forEach(k => assert(javaKeys.has(k), 'notesJson does not send ' + k));
+  const srv = await startMockServer({ port: 0 });
+  try {
+    const d = await (await fetch(srv.url + '/api/notes?v=-1')).json();
+    assert.equal(typeof d.settled, 'boolean', 'mock settled');
+    assert.equal(typeof d.changedMs, 'number', 'mock changedMs');
+    assert.equal(typeof d.selPlayStart, 'number', 'mock selPlayStart (arranger)');
+    const missing = [...javaKeys].filter(k => !(k in d) && !EXTENSION_ONLY.includes(k));
+    assert.deepEqual(missing, [], '/api/notes fields the extension sends but the mock does not');
+    srv.setData({ source: 'launcher' });
+    assert.equal((await (await fetch(srv.url + '/api/notes?v=-1')).json()).selPlayStart, null, 'selPlayStart is null for the launcher');
+  } finally { await srv.close(); }
+  const old = await startMockServer({ port: 0, settle: false });
+  try {
+    const d = await (await fetch(old.url + '/api/notes?v=-1')).json();
+    TIMING.forEach(k => assert(!(k in d), 'mock settle: false still sends ' + k));
+  } finally { await old.close(); }
+  ok('/api/notes timing fields (settled, changedMs, selPlayStart) in the extension and the mock');
+}
+
+// ---- LiveSync: /api/notes versions per observer burst and the settled flag (fake clock)
+if (java) {
+  const out = java('LiveSyncCheck');
+  const bad = out.split(/\r?\n/).filter(l => / FAIL /.test(l));
+  assert.deepEqual(bad, [], 'LiveSyncCheck:\n' + out);
+  assert.match(out, /^done$/m);
+  ok(`LiveSync (${out.split(/\r?\n/).filter(l => / ok$/.test(l)).length} checks)`);
 }
 
 console.log(`protocol-test: ${passed} passed`);

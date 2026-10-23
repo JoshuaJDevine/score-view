@@ -89,7 +89,7 @@ try {
   await ctrl('KeyC');
   await ctrl('KeyV');
   let rep = await waitReport();
-  assert.match(rep.error, /Read arrangement/, rep.message);
+  assert.match(rep.error, /Read project/, rep.message);
   // No read: Alt+click cannot copy, so it stays playback.js's play-from-bar even with a passage selected.
   const edits0 = srv.edits.length;
   await click('Piano', 2, ['Alt']);
@@ -140,9 +140,10 @@ try {
   await page.waitForFunction(() => SV.state.liveData.track === 'Violins 2' && SV.state.selection.has('L0_96_77'), { timeout: 10000 });
   s = await selection();
   assert.deepEqual([s.staves, s.from, s.to], [['Violins 2'], 2, 2], 'the passage moves to the destination');
-  await page.keyboard.press('ArrowUp');
+  const semiUp = async () => { await page.keyboard.down('Alt'); await page.keyboard.press('ArrowUp'); await page.keyboard.up('Alt'); }; // Score View keys
+  await semiUp();
   await page.waitForFunction(() => SV.state.selection.has('L0_96_78'), { timeout: 5000 });
-  await page.keyboard.press('ArrowUp');
+  await semiUp();
   await page.waitForFunction(() => SV.state.liveData.notes.some(q => q.x === 96 && q.y === 79), { timeout: 5000 });
   assert.ok(notesOf('Violins 2').some(q => q[0] === 96 && q[1] === 79), '↑↑ moved the pasted note in Bitwig');
   const score = await page.evaluate(() => SV.state.base.parts.find(p => p.name === 'Violins 2').notes.map(q => [q.start, q.pitch]));

@@ -33,7 +33,6 @@
   --sv-shadow-dlg: 0 16px 48px #000c;
   --sv-toast-bg: #111111dd;
   --sv-toast-text: #ffffff;
-  --sv-drop-bg: #ff7a1a33;
   --sv-empty-text: #555555;
 
   /* paper (features/theme.js re-tunes these for dark paper) */
@@ -180,13 +179,15 @@ main { flex: 1; overflow: auto; position: relative; outline: none; }
 #paper { background: var(--sv-paper); margin: var(--sv-space-6); padding: var(--sv-space-4) 0; min-height: 200px; box-shadow: var(--sv-shadow-paper);
          width: fit-content; min-width: calc(100% - 32px); }
 #paper svg { display: block; }
+/* One engraving per .svc (the whole score, or one system: core/render.js). Off-screen chunks skip style, layout and
+   paint (content-visibility); their size is the SVG's own height, so the page does not jump when they come into view. */
+#paper > .svc { position: relative; content-visibility: auto; }
+#paper > .svc-wait { display: flex; align-items: center; justify-content: center; color: var(--sv-empty-text); font-size: 12px;
+                     background: repeating-linear-gradient(0deg, transparent 0 9px, var(--sv-divider) 9px 10px) center / 90% 50px no-repeat; opacity: .6; }
 #paper g.note, #paper g.chord { cursor: pointer; }
 #paper .sel, #paper .sel * { fill: var(--sv-sel) !important; stroke: var(--sv-sel); }
 #paper .play, #paper .play * { fill: var(--sv-play) !important; }
 #empty { color: var(--sv-empty-text); padding: 40px; font-size: 15px; text-align: center; }
-#drop { position: fixed; inset: 0; background: var(--sv-drop-bg); border: 3px dashed var(--sv-accent); display: none;
-        align-items: center; justify-content: center; font-size: 22px; color: #fff; z-index: var(--sv-z-dialog); }
-body.dragging #drop { display: flex; }
 
 /* ---------------------------------------------------------------- footer (shortcuts) */
 footer { position: relative; max-height: 1.55em; overflow: hidden; padding: 5px 110px 5px var(--sv-space-5);
@@ -197,18 +198,11 @@ footer.open { max-height: 45vh; overflow: auto; }
 footer kbd { background: var(--sv-surface-3); border: 1px solid var(--sv-border); border-radius: 3px; padding: 0 4px; color: var(--sv-text);
              font: var(--sv-fs-small) var(--sv-font-mono); }
 
-/* ---------------------------------------------------------------- Tracks menu */
+/* ---------------------------------------------------------------- Pin toggle (the selected clip's track) */
 .dropdown { position: relative; }
-#trackPanel { position: absolute; top: calc(100% + 4px); left: 0; z-index: var(--sv-z-menu); background: var(--sv-surface-1);
-              border: 1px solid var(--sv-border); border-radius: var(--sv-radius-md); padding: var(--sv-space-4) 10px; min-width: 230px;
-              max-height: 70vh; overflow: auto; box-shadow: var(--sv-shadow-pop); }
-#trackPanel label { display: block; padding: 2px 0; color: var(--sv-text); white-space: nowrap; }
-#trackPanel a { color: var(--sv-accent); cursor: pointer; }
-#trackList { margin-top: var(--sv-space-3); border-top: 1px solid var(--sv-border); padding-top: var(--sv-space-2); }
-#trackList label { padding-left: 10px; }
-.tgroup { color: var(--sv-text-dim); font-size: var(--sv-fs-small); text-transform: uppercase; letter-spacing: .05em; margin-top: var(--sv-space-3); }
-#trackPanel .hint { color: var(--sv-text-dim); font-size: var(--sv-fs-small); white-space: normal; margin-top: var(--sv-space-2); max-width: 240px; }
-#trackPanel .cur { color: var(--sv-accent); font-size: var(--sv-fs-small); }
+#pinBtn.pin-toggle { min-width: 64px; }
+#pinBtn.pin-toggle.on { background: var(--sv-accent); border-color: var(--sv-accent); color: #111; }
+#pinBtn.pin-toggle:disabled { opacity: .45; cursor: default; }
 
 /* ---------------------------------------------------------------- toast */
 #flash { position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%); background: var(--sv-toast-bg); color: var(--sv-toast-text);

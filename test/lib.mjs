@@ -50,6 +50,9 @@ export async function withPage({ port = 8800, fixture, width = 1500, height = 90
     await page.evaluateOnNewDocument((m, h) => {
       try {
         localStorage.setItem('scoreview.mode', JSON.stringify(m));
+        localStorage.setItem('scoreview.view', JSON.stringify(m));
+        // tests see the selected clip's track + pins in Score view unless they ask for all (SV.core.setScoreShow('all'))
+        if (localStorage.getItem('scoreview.scoreShow') == null) localStorage.setItem('scoreview.scoreShow', JSON.stringify('pinned'));
         if (h) localStorage.setItem('scoreview.layout.header', JSON.stringify(h));
       } catch (e) { /* ignore */ }
     }, mode, header || null);

@@ -7,10 +7,12 @@
 
   Object.assign(window.SV, {
     state, hooks,
-    render: C.render,               // engraves now; SV.state.render is current when it returns
-    requestRender: C.requestRender, // engraves once before the next frame, however often it is called
+    render: C.render,               // renders now: SV.state.render (the model) is current when it returns; its SVG is on
+                                    // the paper then too unless a big engraving runs in the workers (state.render.drawn)
+    requestRender: C.requestRender, // renders once before the next frame, however often it is called
+    rendered: C.rendered,           // Promise of SV.state.render once its SVG is on the paper (afterRender has run)
     send: C.send, flash: C.flash, hitTest: C.hitTest, liveNotes: C.liveNotes, currentTrack: C.currentTrack,
-    togglePin: C.togglePin, renderTrackList: C.renderTrackList, cycleAlign: C.cycleAlign, setBase: C.setBase,
+    togglePin: C.togglePin, renderTrackList: C.renderTrackList, cycleAlign: C.cycleAlign, setBase: C.setBase, updateBase: C.updateBase,
     newScore: C.newScore, forgetScore: C.forgetScore, freshScoreFromTracks: C.freshScoreFromTracks, contentOrigin: C.contentOrigin,
     isLive: C.isLive, parseId: C.parseId, liveId: C.liveId, paintSelection: C.paintSelection,
     noteAt: C.noteAt, clickPaper: C.clickPaper, moveSelection: C.moveSelection, gridBeats: C.gridBeats,

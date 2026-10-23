@@ -32,10 +32,15 @@ await withPage({ port: Number(process.env.PORT || 8822) }, async ({ page, errors
   await page.evaluate(() => SV.instruments.setOverride('Violin 1', null));
   await page.waitForFunction(() => SV.state.render.staves[0].clef.shape === 'G');
 
-  // Toolbar panel lists the shown track.
+  // Toolbar panel lists every track with its pin and instrument; ticking 📌 pins the track.
   await openMenu(page, 'instruments');
   await page.waitForSelector(SEL.instruments.row);
-  assert.match(await page.$eval(SEL.instruments.row, el => el.textContent), /Violin 1.*Violin/);
+  const row = await page.$eval('.svi-row[data-part="Violin 1"]', el => el.textContent);
+  assert.match(row, /Violin 1.*selected.*Violin/);
+  await page.click('.svi-row[data-part="Viola"] input[data-pin]');
+  assert.ok(await page.evaluate(() => SV.state.pinned.has('Viola')), 'ticking 📌 pins the track');
+  await page.click('.svi-row[data-part="Viola"] input[data-pin]');
+  assert.ok(!(await page.evaluate(() => SV.state.pinned.has('Viola'))), 'and unpins it');
   await page.screenshot({ path: 'test/out-instruments-e2e.png' });
   await page.keyboard.press('Escape');
   await page.evaluate(() => { localStorage.removeItem('scoreview.instruments.ranges'); });

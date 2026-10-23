@@ -170,7 +170,7 @@
       const s = sigOf(c);
       (crawl.result || []).forEach(o => {
         if (o === c || !o.notes || !o.notes.length || !near(o.playStart, c.playStart) || !near(o.playStop, c.playStop) || sigOf(o) !== s) return;
-        out.push(`${o.track} bar ${O.barOf(o.start, measureBeats)} has the same notes as the ${c.track} clip at bar ${O.barOf(c.start, measureBeats)} — if it is a clip alias it changed too (⟳ Read arrangement to see it)`);
+        out.push(`${o.track} bar ${O.barOf(o.start, measureBeats)} has the same notes as the ${c.track} clip at bar ${O.barOf(c.start, measureBeats)} — if it is a clip alias it changed too (⟳ Read project to see it)`);
       });
     });
     return [...new Set(out)];
@@ -330,7 +330,7 @@
     save(CLIP_KEY, clipboard);
     const n = clipboard.staves.reduce((s, x) => s + x.notes.length, 0);
     const msg = `Copied ${barText(sel)} of ${sel.staves.length === 1 ? sel.staves[0] : sel.staves.length + ' staves'} (${n} note${n === 1 ? '' : 's'})`
-      + (crawlOk() ? '' : ' — ⟳ Read arrangement before pasting into Bitwig');
+      + (crawlOk() ? '' : ' — ⟳ Read project before pasting into Bitwig');
     status(msg);
     SV.flash(msg);
     renderPanel();
@@ -340,7 +340,7 @@
   // Why a write into Bitwig cannot start now (null = it can).
   async function precheck() {
     if (S.mode !== 'score') return 'Switch to Score mode to paste between staves';
-    if (!crawlOk()) return 'Pasting between staves writes through the clip list of the last ⟳ Read arrangement — read it first';
+    if (!crawlOk()) return 'Pasting between staves writes through the clip list of the last ⟳ Read project — read it first';
     if (!isLivePage()) return 'Not connected to Bitwig';
     if (busy || (orc().isBusy && orc().isBusy())) return 'Busy writing into Bitwig — wait for it to finish';
     if (S.playing) return 'Stop playback first';
@@ -351,10 +351,22 @@
     return null;
   }
   // The last read is out of date for these tracks (arrangement.js heuristic): refuse rather than clear the wrong notes.
+  // Every reason that names a target track counts (changed, a clip that may have moved, an unsure clip, heard while
+  // playing), and the track list.
   function staleFor(tracks) {
     const why = SV.arrangement && SV.arrangement.staleReasons ? SV.arrangement.staleReasons() : [];
-    const hit = why.filter(r => /^tracks /.test(r) || tracks.some(t => r === t + ' changed'));
-    return hit.length ? `The last read is out of date (${hit.join('; ')}) — ⟳ Read arrangement again before pasting` : null;
+    const hit = why.filter(r => /^tracks /.test(r) || tracks.some(t => r === t + ' changed' || r.startsWith(t + ': ') || r.startsWith(t + ' changed at bar ')));
+    return hit.length ? `The last read is out of date (${hit.join('; ')}) — refresh it (the ● next to ⟳ Read) before pasting` : null;
+  }
+  // A read restored from storage (arrangement.js): clips not seen in Bitwig since may have changed while the page was
+  // closed; a paste would clear and write them from old notes and bounds.
+  function unconfirmedFor(jobs) {
+    const un = SV.arrangement && SV.arrangement.unconfirmed ? SV.arrangement.unconfirmed(jobs.map(j => j.clip)) : [];
+    if (!un.length) return null;
+    const mb = measureBeats(), info = SV.arrangement.mirrorInfo();
+    const list = un.map(c => `${c.track} bar ${Math.floor(c.start / mb + 1e-6) + 1}`).join(', ');
+    return `The read was restored from ${new Date(info.readAt).toLocaleString()} and these clips have not been seen since ` +
+      `(Bitwig may have changed them meanwhile): ${list} — click each in Bitwig once, or ⟳ Read project, then paste`;
   }
 
   async function runBatch(lines) {
@@ -397,6 +409,8 @@
     const plan = Core.planPaste(crawl, t.targets, { clipEnd: clipEndFn(), measureBeats: mb, rowsOf, mode: prefs.mode, keyswitches: copyData.keyswitches });
     if (plan.errors.length) return report({ error: 'Nothing pasted — ' + plan.errors.map(e => e.error).join(' · ') });
     if (!plan.jobs.length) return report({ error: 'Nothing to change there' });
+    const unseen = unconfirmedFor(plan.jobs);
+    if (unseen) return report({ error: unseen });
     const info = Core.aliasWarnings(crawl, plan.jobs, mb);
     busy = true;
     setBusy(true);
@@ -489,7 +503,7 @@
     const beat = first.start;
     const spans = orc().clipIndex(crawl, clipEndFn()).get(track) || [];
     const sp = spans.find(s => s.clip.start <= beat + EPS && beat < s.end - EPS);
-    if (!sp) { SV.flash(`No clip of ${track} found under this note — ⟳ Read arrangement again`); return true; }
+    if (!sp) { SV.flash(`No clip of ${track} found under this note — ⟳ Read project again`); return true; }
     const why = await precheck();
     if (why && !/^Pasting between staves/.test(why)) { SV.flash(why); return true; }
     const c = sp.clip, spb = crawl.stepsPerBeat || 24;
@@ -592,7 +606,7 @@
   }
   SV.addHelp('<b>Passage</b> (Score mode) click an empty spot of a bar: select it · <kbd>Shift</kbd>+click extends · <kbd>Ctrl</kbd>+click adds a staff · '
     + '<kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>V</kbd> copy / paste between staves · <kbd>Alt</kbd>+click a bar: copy there · '
-    + '<kbd>R</kbd> repeat · click another staff\'s note: make its clip live (needs ⟳ Read arrangement)');
+    + '<kbd>R</kbd> repeat · click another staff\'s note: make its clip live (needs ⟳ Read project)');
 
   // ------------------------------------------------------------------ toolbar panel (preferences)
 
@@ -608,7 +622,7 @@
     const cb = clipboard;
     const info = (sel ? `Selected: ${barText(sel)} · ${sel.staves.join(', ')}` : 'Click an empty spot of a bar to select it; Shift+click extends, Ctrl+click adds a staff.')
       + '\n' + (cb ? `Copied: ${cb.bars} bar${cb.bars === 1 ? '' : 's'} × ${cb.staves.length} ${cb.staves.length === 1 ? 'staff' : 'staves'} (${cb.staves.map(s => s.track).join(', ')})` : 'Nothing copied yet.')
-      + (crawlOk() ? '' : '\nPasting needs ⟳ Read arrangement (it writes through the clip list of the read).');
+      + (crawlOk() ? '' : '\nPasting needs ⟳ Read project (it writes through the clip list of the read).');
     panel.innerHTML = `
       <div class="pas-info" id="pasInfo">${esc(info)}</div>
       <div class="pas-row"><button class="btn" id="pasCopy" ${sel ? '' : 'disabled'}>Copy</button>
@@ -621,7 +635,7 @@
       <label><input type="checkbox" id="pasClick" ${prefs.click === 'select' ? 'checked' : ''}> Click an empty spot of a bar to select it</label>
       <label><input type="checkbox" id="pasAlt" ${prefs.altClick === 'copy' ? 'checked' : ''}> Alt+click a bar copies the selected passage there (off: plays from the bar)</label>
       <label><input type="checkbox" id="pasLive" ${prefs.noteClick === 'live' ? 'checked' : ''}> Click a note on another staff to make its clip live</label>
-      <label title="After ⟳ Read arrangement, tracks whose clips have no notes yet get a staff too, so you can paste into them (Hide empty staves is set aside while they are shown)"><input type="checkbox" id="pasEmpty" ${prefs.emptyStaves ? 'checked' : ''}> Show tracks with empty clips (to paste into)</label>
+      <label title="After ⟳ Read project, tracks whose clips have no notes yet get a staff too, so you can paste into them (Hide empty staves is set aside while they are shown)"><input type="checkbox" id="pasEmpty" ${prefs.emptyStaves ? 'checked' : ''}> Show tracks with empty clips (to paste into)</label>
       <div class="pas-status ${statusBad ? 'bad' : ''}" id="pasStatus">${esc(statusText)}</div>
       <div class="pas-row" style="justify-content:flex-end"><button class="btn" id="pasClose">Close</button></div>`;
   }

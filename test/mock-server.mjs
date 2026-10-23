@@ -7,6 +7,14 @@
 //   import { startMockServer } from './mock-server.mjs';
 //   const srv = await startMockServer({ port: 8800 });  // srv.url, srv.state, srv.edits, srv.refusedOps, srv.close()
 // Render dynamics: curve ops, /api/curve and /api/marks come from test/mock-curve.mjs (option curve: {devices, missing, speed, marks}).
+// Timing (LiveSync.java): /api/notes carries settled / changedMs / selPlayStart and one more version is published once
+// nothing changed for settle.quietMs (settle.switchQuietMs after a clip switch); settle: false = an extension without
+// those fields. srv.switchClip(target, {noteMs, trackMs, playStartMs}) delivers a clip switch the way Bitwig does: the
+// old notes go and the new ones arrive one by one, the track name and the play start marker follow later.
+// Stored arrangement reads (GET/POST /api/arrangement, ArrangementMirror.java): srv.mirror (project -> JSON text); option
+// mirror: false answers 404 like an extension without the endpoint; option project names the open project ('Mock').
+// Listen while playing (GET /api/listen, NoteListen.java): the mock plays its arrangement while the transport runs
+// (srv.listen: transform per track = a Note FX, lag, auto, requests; srv.pushListen(index, events)).
 // Edit ops follow MOCK_OPS (= src/claude/scoreview/EditOps.java, checked by test/protocol-test.mjs).
 import http from 'http';
 import fs from 'fs';
@@ -57,12 +65,13 @@ export const MOCK_OPS = {
   redo: [0, 0, 'extension'], source: [1, 1, 'extension'],
   play: [0, 0, 'extension'], stop: [0, 0, 'extension'], toggle: [0, 0, 'extension'], playFrom: [1, 1, 'extension'],
   position: [1, 1, 'extension'], loop: [2, 2, 'extension'], loopOff: [0, 0, 'extension'], solo: [2, 2, 'extension'],
-  mute: [2, 2, 'extension'], metronome: [1, 1, 'extension'],
-  crawl: [0, 1, 'crawler'], crawlCancel: [0, 0, 'crawler'],
+  mute: [2, 2, 'extension'], deviceOn: [2, 2, 'extension'], metronome: [1, 1, 'extension'],
+  crawl: [0, Infinity, 'crawler'], crawlCancel: [0, 0, 'crawler'],
   goto: [3, Infinity, 'navigator'], gotoStay: [3, Infinity, 'navigator'], gotoHome: [0, 1, 'navigator'], navCancel: [0, 0, 'http'],
   wizardCancel: [0, 0, 'wizard'],
   curveClear: [0, 0, 'curve'], curveSet: [5, 5, 'curve'], curvePreview: [2, 2, 'curve'], curveRender: [2, 2, 'curve'], curveStop: [0, 0, 'curve'],
   act: [1, Infinity, 'extension', true], clipNext: [0, 0, 'extension', true], clipPrev: [0, 0, 'extension', true],
+  clipStepProbe: [0, 1, 'extension', true],
   selectTrack: [1, 1, 'extension', true], moveTrackAfter: [2, 2, 'extension', true], moveTrackBefore: [2, 2, 'extension', true],
 };
 // Why an op line must not be applied (unknown, too few arguments), or null. Mirrors EditOps.problem().
@@ -78,20 +87,28 @@ const DEFAULT_MARKERS = [{ name: 'Intro', beat: 0 }, { name: 'A', beat: 32 }, { 
 
 export async function startMockServer({ port = 8800, fixture = path.join(ROOT, 'test/fixtures/live-violin1.json'), quiet = true,
                                         markers = DEFAULT_MARKERS, clipOffset = 0, arrangement = null, wizard: wizardOpts = {},
-                                        developerMode = false, curve: curveOpts = {} } = {}) {
+                                        developerMode = false, curve: curveOpts = {}, devices = [], project = 'Mock',
+                                        mirror: mirrorOn = true, settle = { quietMs: 100, switchQuietMs: 200 } } = {}) {
   const base = JSON.parse(fs.readFileSync(fixture, 'utf8'));
   const tracksFixture = JSON.parse(fs.readFileSync(path.join(ROOT, 'test/fixtures/live-bass.json'), 'utf8')).tracks;
   const state = {
     v: 1,
     data: { source: 'arranger', exists: true, length: 16, num: 4, den: 4, ...base,
             tracks: (base.tracks || tracksFixture).map((t, index) => ({ index, solo: false, mute: false, ...t, sel: t.name === base.track })),
-            markers: base.markers || markers.map(m => ({ ...m })) },
+            markers: base.markers || markers.map(m => ({ ...m })),
+            // the selected track's devices (option devices: [names]; srv.setData({devices}) to change them)
+            devices: { track: base.track || 'Violin 1', list: devices.map((name, index) => ({ index, name, on: true })) } },
     play: { playing: false, step: -1, pos: 0, tempo: 120, loop: { on: false, start: 0, length: 16 }, metronome: false },
     // Transport simulation: started by the play/stop/toggle/playFrom/position ops, the playhead advances at
     // tempo from anchor.pos (anchor.t = wall-clock ms). setPlay() switches it off so tests can pin exact values.
     sim: false, anchor: { pos: 0, t: 0 },
     clipOffset,  // arranger beat where the mock clip starts (drives the clip "step" while playing)
+    project,     // the open project (/api/transport, /api/arrangement); srv.setProject() also puts it into /api/notes
   };
+  // Stored arrangement reads per project (ArrangementMirror.java): a finished full crawl is stored by the "extension",
+  // the page posts its mirror after harvesting clips or re-reading tracks.
+  const mirror = new Map();
+  const mirrorPosts = [];
   const edits = [];      // every op line received, in order
   const waiters = [];
   // MIDI bridge (/api/midi): ring of note events, as the extension forwards them from the selected track.
@@ -105,7 +122,70 @@ export async function startMockServer({ port = 8800, fixture = path.join(ROOT, '
     if (midi.events.length > 256) midi.events.splice(0, midi.events.length - 256);
     midi.waiters.splice(0).forEach(fn => fn());
   }
-  const bump = () => { state.v++; waiters.splice(0).forEach(fn => fn()); };
+  // A change wakes the long poll at once (unsettled); the settled version follows after the quiet window. switchLike:
+  // the change belongs to a clip switch (the longer window, like LiveSync.SWITCH_QUIET_MS).
+  const sync = { settled: true, changedAt: Date.now(), switchLike: false, timer: null, settledVersions: 0 };
+  const wake = () => { state.v++; waiters.splice(0).forEach(fn => fn()); };
+  const bump = (switchLike = false) => {
+    sync.changedAt = Date.now();
+    if (settle) {
+      sync.settled = false;
+      if (switchLike) sync.switchLike = true;
+      clearTimeout(sync.timer);
+      sync.timer = setTimeout(() => { sync.settled = true; sync.switchLike = false; sync.settledVersions++; wake(); },
+        sync.switchLike ? settle.switchQuietMs : settle.quietMs);
+    }
+    wake();
+  };
+  // Whether a change (srv.setData / setNotes) looks like a clip switch to LiveSync: another track or play range, or
+  // notes both removed and added beyond a single move (LiveSync.SWITCH_NOTES).
+  const looksLikeSwitch = d => {
+    const cur = state.data;
+    if (['track', 'exists', 'length', 'playStart', 'loop', 'loopStart', 'loopLength'].some(k => k in d && d[k] !== cur[k])) return true;
+    if (!d.notes) return false;
+    const k = n => n.ch + '_' + n.x + '_' + n.y, before = new Set(cur.notes.map(k)), after = new Set(d.notes.map(k));
+    const added = [...after].filter(x => !before.has(x)).length, removed = [...before].filter(x => !after.has(x)).length;
+    return added > 0 && removed > 0 && added + removed > 3;
+  };
+  // The play start marker (Bitwig moves it to a selected arranger clip); srv.switchClip holds the old value a moment.
+  const playStartNow = () => sync.heldPlayStart != null ? sync.heldPlayStart
+    : arr ? (nav.playStart ?? arr.clips[nav.cur].start) : state.clipOffset;
+  const timing = () => settle ? { settled: sync.settled, changedMs: Date.now() - sync.changedAt,
+                                  selPlayStart: state.data.source === 'arranger' ? playStartNow() : null } : {};
+  // Listen while playing (/api/listen, NoteListen.java): notes played per track, stamped with the arranger beat. With an
+  // arrangement the mock plays its clips: each /api/listen while the transport runs adds the onsets the playhead passed
+  // since the previous call. srv.arrangement is Bitwig's truth (change its notes to simulate edits the page has not
+  // seen). srv.listen.transform[track] = ev => ev | [ev, ...] | null simulates a Note FX; srv.listen.lag = beats added
+  // to every stamp; srv.listen.auto = false stops the playing; srv.pushListen(index, [{on, key, vel, beat}]) adds events.
+  const listen = { seq: 0, events: new Map(), transform: {}, lag: 0, auto: true, last: null, requests: 0 };
+  function pushListen(index, evs) {
+    const ring = listen.events.get(index) || [];
+    [].concat(evs).forEach(e => ring.push([++listen.seq, e.on === false ? 0 : 1, e.key, e.vel == null ? 100 : e.vel,
+      e.beat, e.t != null ? e.t : Date.now(), e.playing === false ? 0 : 1]));
+    if (ring.length > 512) ring.splice(0, ring.length - 512);
+    listen.events.set(index, ring);
+  }
+  function playArrangement(snap) {
+    const was = listen.last;
+    listen.last = snap.playing ? snap.pos : null;
+    if (!arr || !listen.auto || was == null || !snap.playing) return;
+    const l = state.play.loop;
+    const spans = snap.pos >= was ? [[was, snap.pos]] : l.on && l.length > 0 ? [[was, l.start + l.length], [l.start, snap.pos]] : [];
+    arr.clips.forEach(c => {
+      const t = state.data.tracks.find(x => x.name === c.track);
+      if (!t) return;
+      c.notes.forEach(n => {
+        const at = n.x / 24;
+        if (at < (c.playStart || 0) - 1e-9 || at >= c.playStop - 1e-9) return;
+        const beat = c.start + at - (c.playStart || 0);
+        if (!spans.some(([a, b]) => beat >= a - 1e-9 && beat < b - 1e-9)) return;
+        let evs = [{ key: n.y, vel: n.vel == null ? 100 : n.vel, beat: beat + listen.lag }];
+        const fx = listen.transform[c.track];
+        if (fx) evs = [].concat(fx(evs[0]) || []);
+        pushListen(t.index, evs);
+      });
+    });
+  }
   // New Score wizard job (/api/wizard): see test/mock-wizard.mjs. Options: { stepMs, groupAction }.
   const wizard = createMockWizard({ data: state.data, play: state.play, bump, ...wizardOpts });
   // Render dynamics (CurvePlayer.java) and the dynamics marks (/api/marks): see test/mock-curve.mjs. srv.curve = its state.
@@ -152,6 +232,7 @@ export async function startMockServer({ port = 8800, fixture = path.join(ROOT, '
                 stayed: null, stayPlayStartAtTarget: false,
                 skipping: false, aborting: false, cancel: false, cur: arr ? arr.home || 0 : -1, homeIndex: -1, playStart: null };
   let crawlState = { state: 'idle', message: '' };
+  let crawlFail = null; // failCrawl(): the next read stops with this { message, fix } (ArrangementCrawler.fail)
   function selectClip(i) {
     const c = arr.clips[i];
     nav.cur = i;
@@ -234,11 +315,31 @@ export async function startMockServer({ port = 8800, fixture = path.join(ROOT, '
     nav.state = 'done'; nav.message = `Back at ${c.track} @ ${c.start}`;
     endSession(false);
   }
-  function crawlResult() {
-    return { state: 'done', message: `Read ${arr.clips.length} clips on ${arr.tracks.length} lanes`, lane: arr.tracks.length, lanes: arr.tracks.length,
-      clips: arr.clips.length, stepsPerBeat: 24, tracks: arr.tracks.map(t => ({ name: t.name, group: !!t.group })),
-      result: arr.clips.map(c => ({ lane: c.lane, track: c.track, start: c.start, playStart: c.playStart, playStop: c.playStop, loop: !!c.loop,
+  // only = track names (op 'crawl tracks ...'): a targeted read of those tracks, like ArrangementCrawler.java.
+  function crawlResult(only = null) {
+    const clips = arr.clips.filter(c => !only || only.includes(c.track));
+    const found = only ? only.filter(n => clips.some(c => c.track === n)) : null;
+    return { state: 'done', message: only ? `Read ${clips.length} clips on ${found.length} of ${only.length} tracks` : `Read ${clips.length} clips on ${arr.tracks.length} lanes`,
+      lane: arr.tracks.length, lanes: arr.tracks.length, clips: clips.length, stepsPerBeat: 24,
+      ...(only ? { subset: only, found, complete: true } : {}),
+      tracks: arr.tracks.map(t => ({ name: t.name, group: !!t.group })),
+      result: clips.map(c => ({ lane: c.lane, track: c.track, start: c.start, playStart: c.playStart, playStop: c.playStop, loop: !!c.loop,
         loopStart: c.loopStart || 0, loopLength: c.loopLength || c.playStop, notes: c.notes.map(n => [n.ch, n.x, n.y, n.d, n.vel]) })) };
+  }
+  function crawl(words) {
+    if (!arr) return;
+    // 'crawl [exact] [safe|fast] [tracks <names>]': the flags before 'tracks' only change the extension's timing
+    const flags = [];
+    let a = words;
+    while (a.length && a[0] !== 'tracks') { flags.push(a[0]); a = a.slice(1); }
+    if (crawlFail) { crawlState = { state: 'error', ...crawlFail }; crawlFail = null; return; }
+    const timing = { timing: flags.includes('fast') ? 'fast' : 'safe', skipLanes: flags.includes('fast'), skipped: 0, laneOrder: 'unknown', rewalked: false };
+    if (a[0] === 'tracks') { if (a.length > 1) crawlState = { ...crawlResult(a.slice(1).map(decodeURIComponent)), ...timing }; return; }
+    crawlState = { ...crawlResult(), ...timing };
+    if (!mirrorOn) return;
+    const t = Date.now();
+    mirror.set(state.project, JSON.stringify({ v: 1, project: state.project, readAt: t, savedAt: t, by: 'extension',
+      tracksAtRead: state.data.tracks.map(x => ({ name: x.name })), crawl: crawlState }));
   }
 
   function apply(op) {
@@ -256,7 +357,7 @@ export async function startMockServer({ port = 8800, fixture = path.join(ROOT, '
       case 'goto': navGoto(a); break;
       case 'gotoStay': navGoto(a, true); break;
       case 'gotoHome': navHome(); break;
-      case 'crawl': if (arr) crawlState = crawlResult(); break;
+      case 'crawl': crawl(a); break;
       case 'play': if (!state.play.playing) transport(true); break;
       case 'stop': transport(false); break;
       case 'toggle': transport(!state.play.playing); break;
@@ -267,6 +368,7 @@ export async function startMockServer({ port = 8800, fixture = path.join(ROOT, '
       case 'metronome': state.play.metronome = a[0] === '1'; break;
       case 'curveClear': case 'curveSet': case 'curvePreview': case 'curveRender': case 'curveStop': curve.apply(cmd, a); break;
       case 'solo': case 'mute': { const t = trackAt(n[0]); if (t) t[cmd] = a[1] === '1'; break; }
+      case 'deviceOn': { const dv = (state.data.devices.list || []).find(x => x.index === n[0]); if (dv) dv.on = a[1] === '1'; break; }
       default: break; // select, audition, undo, redo, ... are only recorded
     }
     notes.sort((p, q) => p.x - q.x || p.y - q.y);
@@ -290,7 +392,7 @@ export async function startMockServer({ port = 8800, fixture = path.join(ROOT, '
     const json = (obj) => { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); };
     if (url.pathname === '/api/notes') {
       const since = Number(url.searchParams.get('v'));
-      const reply = () => json({ v: state.v, stepsPerBeat: 24, ...state.data, v: state.v });
+      const reply = () => json({ v: state.v, stepsPerBeat: 24, ...state.data, ...timing(), v: state.v });
       if (since !== state.v) return reply();
       const t = setTimeout(() => { const i = waiters.indexOf(reply2); if (i >= 0) waiters.splice(i, 1); reply(); }, 5000);
       const reply2 = () => { clearTimeout(t); reply(); };
@@ -308,13 +410,41 @@ export async function startMockServer({ port = 8800, fixture = path.join(ROOT, '
       midi.waiters.push(reply2);
       return;
     }
+    if (url.pathname === '/api/listen') {
+      let since = url.searchParams.has('since') ? Number(url.searchParams.get('since')) : -1;
+      const snap = playSnapshot();
+      playArrangement(snap);
+      listen.requests++;
+      if (!Number.isFinite(since) || since > listen.seq) since = -1;
+      const tracks = since < 0 ? [] : [...listen.events.entries()].sort((a, b) => a[0] - b[0])
+        .map(([index, ring]) => ({ index, name: (trackAt(index) || {}).name || null, events: ring.filter(e => e[0] > since) }))
+        .filter(t => t.events.length);
+      return json({ seq: listen.seq, playing: !!snap.playing, pos: snap.pos, tracks });
+    }
     if (url.pathname === '/favicon.ico') { res.writeHead(204); return res.end(); }
     if (url.pathname === '/api/play') return json(playSnapshot());
     if (url.pathname === '/api/nav') return json(navStatus());
     if (url.pathname === '/api/crawl') return json(crawlState);
+    if (url.pathname === '/api/arrangement') {
+      if (!mirrorOn) { res.writeHead(404); return res.end('not found'); }
+      if (req.method !== 'POST') return json({ project: state.project, cache: null, doc: mirror.has(state.project) ? JSON.parse(mirror.get(state.project)) : null });
+      let body = '';
+      req.on('data', c => body += c);
+      req.on('end', () => {
+        const want = url.searchParams.get('project');
+        const text = (code, msg) => { res.writeHead(code, { 'Content-Type': 'text/plain' }); res.end(msg); };
+        if (want !== state.project) return text(409, 'the open project is ' + state.project);
+        if (!/^\s*\{[\s\S]*\}\s*$/.test(body)) return text(400, 'the document must be a JSON object');
+        mirror.set(state.project, body.trim());
+        mirrorPosts.push({ project: want, t: Date.now(), length: body.length });
+        text(200, 'ok');
+      });
+      return;
+    }
+    if (url.pathname === '/api/meter') return json({ t: Date.now(), tracks: (state.data.tracks || []).map((t, i) => ({ index: t.index ?? i, name: t.name, peak: 0 })) });
     if (url.pathname === '/api/transport') {
-      const c = arr ? arr.clips[nav.cur] : null; // Bitwig moves the play start marker to the selected clip
-      return json({ project: 'Mock', playing: !!playSnapshot().playing, playStart: c ? (nav.playStart ?? c.start) : state.clipOffset, pos: playSnapshot().pos });
+      // Bitwig moves the play start marker to the selected clip
+      return json({ project: state.project, playing: !!playSnapshot().playing, playStart: playStartNow(), pos: playSnapshot().pos });
     }
     if (url.pathname === '/api/actions') return json([]);
     if (url.pathname === '/api/wizard') return wizard.handle(req, res, url, json);
@@ -324,7 +454,8 @@ export async function startMockServer({ port = 8800, fixture = path.join(ROOT, '
       let body = '';
       req.on('data', c => body += c);
       req.on('end', () => {
-        body.split('\n').filter(l => l.trim()).forEach(l => {
+        const lines = body.split('\n').filter(l => l.trim());
+        lines.forEach(l => {
           edits.push(l.trim());
           if (l.trim() === 'navCancel') { nav.cancel = true; return; }
           const words = l.trim().split(/\s+/);
@@ -335,7 +466,8 @@ export async function startMockServer({ port = 8800, fixture = path.join(ROOT, '
           apply(l);
         });
         navQueueEmpty();
-        if (!nav.session) bump(); // like the extension: the page is not woken mid-session
+        // like the extension: the page is not woken mid-session; another clip selected = the longer settle window
+        if (!nav.session) bump(lines.some(l => /^(goto|gotoStay|gotoHome|source)\b/.test(l.trim())));
         res.writeHead(200); res.end('ok');
       });
       return;
@@ -354,14 +486,50 @@ export async function startMockServer({ port = 8800, fixture = path.join(ROOT, '
   if (!quiet) console.log('mock Score View server on http://localhost:' + port);
   return {
     url: 'http://localhost:' + port, port, rejected, refusedOps, state, edits, midi, nav, arrangement: arr, wizard: wizard.w, // wizard: { plans, swaps, state, ... }
+    mirror, mirrorPosts, // stored arrangement reads: project -> JSON text; the page's POSTs
+    listen, pushListen,  // listen while playing (/api/listen): { transform, lag, auto, requests }, pushListen(index, events)
+    // The user clicks arranger clip i (arrangement option): it becomes the selected clip, the play start moves to it.
+    selectClip(i) { selectClip(i); bump(); },
+    // The next read fails like ArrangementCrawler.fail: fix 'clickClip' (Bitwig's focus is not on the timeline) or 'stop'.
+    failCrawl(message, fix = '') { crawlFail = { message, fix }; },
+    setProject(name) { state.project = name; state.data.project = name; bump(); },
     curve: curve.c, // Render dynamics: { state, runs, written, curves, devices, missing, speed, marks (JSON text), marksPosts }
     // MIDI bridge: pushMidi([{ type: 'on'|'off', key, vel?, t? (ms), playing? (defaults to the transport) }])
     pushMidi,
-    setNotes(notes) { state.data.notes = notes; bump(); },
+    setNotes(notes) { const sw = looksLikeSwitch({ notes }); state.data.notes = notes; bump(sw); },
     setPlay(p) { state.sim = false; Object.assign(state.play, p); },
     setMarkers(m) { state.data.markers = m; bump(); },
-    setData(d) { Object.assign(state.data, d); bump(); },
-    close: () => new Promise(r => { wizard.close(); curve.close(); waiters.splice(0).forEach(fn => fn()); midi.waiters.splice(0).forEach(fn => fn()); server.close(r); server.closeAllConnections?.(); }),
+    setData(d) { const sw = looksLikeSwitch(d); Object.assign(state.data, d); bump(sw); },
+    sync, // { settled, changedAt, switchLike, settledVersions }
+    /**
+     * Selects another clip the way Bitwig reports it: each old note removed and each new note added in its own version
+     * (noteMs apart), the track name (and track selection) trackMs after the last note, the play start marker
+     * playStartMs after that. target = an arrangement clip index, or { track, notes, length?, playStart?, selPlayStart? }.
+     * Resolves with { lastChangeAt } once everything has arrived.
+     */
+    async switchClip(target, { noteMs = 5, trackMs = 60, playStartMs = 60 } = {}) {
+      const sleep = ms => new Promise(r => setTimeout(r, ms));
+      const c = typeof target === 'number' ? arr.clips[target] : target;
+      const oldPlayStart = playStartNow();
+      sync.heldPlayStart = oldPlayStart;
+      const notes = state.data.notes = state.data.notes.slice(); // (an arrangement clip keeps its own array)
+      while (notes.length) { notes.pop(); bump(true); await sleep(noteMs); }
+      for (const n of c.notes) { notes.push({ sel: false, vel: 100, ...n }); notes.sort((p, q) => p.x - q.x || p.y - q.y); bump(true); await sleep(noteMs); }
+      const len = c.playStop ?? c.length ?? state.data.length;
+      Object.assign(state.data, { length: len, playStart: c.playStart || 0, loop: !!c.loop, loopStart: c.loopStart || 0, loopLength: c.loopLength || len, exists: true });
+      bump(true);
+      await sleep(trackMs);
+      if (typeof target === 'number') { nav.cur = target; nav.playStart = null; c.notes = notes; }
+      state.data.track = c.track;
+      state.data.tracks.forEach(t => { t.sel = t.name === c.track; });
+      bump(true);
+      await sleep(playStartMs);
+      sync.heldPlayStart = null;
+      if (typeof target !== 'number' && c.selPlayStart != null) state.clipOffset = c.selPlayStart;
+      bump(true);
+      return { lastChangeAt: sync.changedAt };
+    },
+    close: () => new Promise(r => { clearTimeout(sync.timer); wizard.close(); curve.close(); waiters.splice(0).forEach(fn => fn()); midi.waiters.splice(0).forEach(fn => fn()); server.close(r); server.closeAllConnections?.(); }),
   };
 }
 

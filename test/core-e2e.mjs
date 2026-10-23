@@ -131,4 +131,40 @@ await withPage({ port, height: 500 }, async ({ page, errors, browser }) => {
 
   assert.deepEqual(errors, []);
 });
+
+// Score mode without anything to match the live clip against (no Read, no export): it is placed at the play start
+// marker, which Bitwig moves to a clip you select (how 'guess'), not at bar 1.
+await withPage({ port: port + 2, mode: 'score' }, async ({ page, srv, errors }) => {
+  await page.waitForFunction(() => window.SV && SV.state.liveData && document.querySelector('#paper svg'), { timeout: 30000 });
+  srv.state.clipOffset = 8;
+  const len = srv.state.data.length + 1;
+  srv.setData({ length: len }); // another clip: Score View takes the play start marker again (selPlayStart once settled)
+  // (the previous clip's guess may still be up for a moment: wait for this clip's)
+  await page.waitForFunction(l => SV.state.liveData.length === l && SV.state.align && SV.state.align.how === 'guess' &&
+    SV.state.align.key === SV.core.clipKey(SV.state.liveData), { timeout: 5000 }, len);
+  assert.equal(await page.evaluate(() => SV.state.align.offset), 8);
+  const first = await page.evaluate(() => {
+    const t = SV.state.render.timeline.filter(e => SV.isLive(e.srcId)).sort((a, b) => a.start - b.start)[0];
+    return t && t.start;
+  });
+  assert.ok(first >= 8, 'the live notes start at the play start marker, not bar 1: ' + first);
+  console.log('ok   no Read: the live clip sits at the play start marker');
+
+  // A clip switch: Bitwig swaps the notes first and reports the new track a moment later. The edited clip's
+  // snapshot (overlay) must keep its own notes, never one of the next clip's. The track name comes 100 ms after the
+  // notes here, inside the extension's (and the mock's) clip-switch quiet window (LiveSync.SWITCH_QUIET_MS = 200).
+  await page.evaluate(() => { SV.state.editedTracks.add(SV.state.liveData.track); SV.render(); });
+  await page.waitForFunction(() => [...SV.state.overlays.values()].some(o => o.track === 'Violin 1'), { timeout: 5000 });
+  const before = await page.evaluate(() => [...SV.state.overlays.values()].find(o => o.track === 'Violin 1').notes.length);
+  const notes0 = srv.state.data.notes.map(n => ({ ...n }));
+  srv.setData({ notes: notes0.slice(0, 3).concat([{ ch: 0, x: 4, y: 99, d: 1, vel: 90 }]) }); // half switched, still 'Violin 1'
+  await new Promise(r => setTimeout(r, 100));
+  await page.evaluate(() => SV.render()); // a redraw while half switched (the old code took its snapshot then)
+  srv.setData({ track: 'Viola', notes: [{ ch: 0, x: 4, y: 99, d: 1, vel: 90 }] });
+  await new Promise(r => setTimeout(r, 1000));
+  const snap = await page.evaluate(() => [...SV.state.overlays.values()].filter(o => o.track === 'Violin 1').map(o => o.notes.map(n => n.pitch)));
+  assert.ok(snap.length === 1 && snap[0].length === before && !snap[0].includes(99), 'the snapshot keeps Violin 1 only: ' + JSON.stringify(snap));
+  console.log('ok   clip switch: no notes of the next clip in the edited clip\'s snapshot');
+  assert.deepEqual(errors, []);
+});
 console.log('core-e2e OK');

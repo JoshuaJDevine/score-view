@@ -45,6 +45,9 @@
     .svw-warnings { color: #f08c00; margin-top: 6px; }
     .svw-confirm { font-size: 13px; line-height: 1.5; }
     .svw-confirm b { color: #fff; }
+    .svw-focus { margin: 10px 0; padding: 8px 10px; border: 1px solid var(--sv-warn, #e0a030); border-radius: 6px; }
+    .svw-focus[hidden] { display: none; }
+    .svw-focus b { color: var(--sv-warn, #e0a030); }
     .svw-bar { height: 8px; background: var(--bar2, #2d2d2d); border-radius: 4px; overflow: hidden; margin: 10px 0; }
     .svw-bar > div { height: 100%; background: var(--accent, #ff7a1a); width: 0; transition: width .2s; }
     .svw-sum li { margin: 2px 0; } .svw-sum .ok { color: #69db7c; } .svw-sum .bad { color: #ff6b6b; }
@@ -209,8 +212,11 @@
   const svInstruments = () => (SV.instruments && SV.instruments.all ? SV.instruments.all() : []);
   const currentTemplate = () => T.templateById(store.get('template', T.TEMPLATES[0].id));
 
+  // BBC SO articulations: 'keys' (default) = keyswitch notes in the clip, which Score View reads and writes; 'map' = the
+  // template's articulation-map Note FX (it re-sends its own keyswitch before every note, so clip keyswitches last one note).
+  const artMaps = () => store.get('artMode', 'keys') === 'map';
   function loadTemplate(id) {
-    rows = T.resolveTemplate(id, INV, HARVEST);
+    rows = T.resolveTemplate(id, INV, HARVEST, { artMaps: artMaps() });
     store.set('template', id);
     saveDraft();
   }
@@ -237,7 +243,8 @@
         <table class="svw-table"><thead><tr><th></th><th>Track</th><th>Group</th><th></th><th>Notation</th><th>Library</th><th>Patch to load inside it</th><th>Articulation map</th><th></th></tr></thead>
           <tbody id="svwRows"></tbody></table>
         <div class="row" style="margin-top:6px"><button class="btn" data-act="add">+ Add instrument</button>
-          <span class="grow"></span>Insert at <select id="svwPos"><option value="-1">end of project</option><option value="0">start of project</option></select></div>
+          <span class="grow"></span><label title="Keyswitch notes: articulations live in the clip and latch until the next change (Score View reads and writes them). Articulation map: a Note FX in front of BBC SO picks the articulation from its selector and re-sends it before every note, so keyswitches written in the clip last one note.">BBC SO articulations <select id="svwArt"><option value="keys">Keyswitch notes (Score View)</option><option value="map">Articulation map (Note FX)</option></select></label>
+          Insert at <select id="svwPos"><option value="-1">end of project</option><option value="0">start of project</option></select></div>
         <div class="dim svw-help">✓ patch preset = the plug-in opens on that patch. More patches: load them in Bitwig, export a DAWproject, then run
           <code>node tools/harvest-presets.mjs &lt;file&gt;</code> and rebuild.</div>
         <div class="svw-warnings" id="svwWarn"></div>
@@ -248,7 +255,7 @@
         <div class="svw-preview" id="svwPreview"></div>
       </section>
       <section class="svw-confirm" hidden></section>
-      <section class="svw-run" hidden><div id="svwMsg">Starting…</div><div class="svw-bar"><div id="svwBar"></div></div><div class="dim" id="svwStep"></div></section>
+      <section class="svw-run" hidden><div id="svwMsg">Starting…</div><div class="svw-focus" id="svwFocus" hidden role="alert"><b>Click Bitwig's window</b> (its title bar) so it can group <span id="svwFocusGroup"></span>: Bitwig's Group command only works while Bitwig is in front. <button class="btn" data-act="skipGroups">Skip grouping</button></div><div class="svw-bar"><div id="svwBar"></div></div><div class="dim" id="svwStep"></div></section>
       <section class="svw-sum" hidden></section>
       <footer><span class="dim grow" id="svwCount"></span>
         <button class="btn" data-act="back" hidden>Back</button>
@@ -264,6 +271,19 @@
     showNote();
     q('#svwTpl').addEventListener('change', showNote);
     q('#svwPos').addEventListener('change', () => store.set('position', +q('#svwPos').value));
+    q('#svwArt').value = store.get('artMode', 'keys');
+    q('#svwArt').addEventListener('change', () => {
+      store.set('artMode', q('#svwArt').value);
+      // Re-resolve the maps of rows that came from the current template; rows added by hand keep their choice.
+      const t = currentTemplate();
+      rows.forEach(r => {
+        if (!artMaps()) { if (r.host === 'BBC Symphony Orchestra' || r.art) r.art = null; return; }
+        const tr = t && t.rows.find(x => x.name === r.name);
+        if (tr) r.art = T.resolveRow(tr, INV, HARVEST, { artMaps: true }).art;
+      });
+      saveDraft();
+      drawRows();
+    });
     dlg.addEventListener('keydown', e => {
       e.stopPropagation();
       if (e.key === 'Escape' && !busy && !pal) { if (!q('.svw-pick').hidden) view('edit'); else close(); }
@@ -426,6 +446,7 @@
         if (q('.svw-edit').hidden) run(); else confirmView();
         break;
       case 'back': view('edit'); break;
+      case 'skipGroups': fetch('/api/wizard?skipGroups', { method: 'POST', body: '' }); q('#svwFocus').hidden = true; break;
       case 'cancel':
         if (busy) { cancelJob(); q('#svwMsg').textContent = 'Stopping after the current step…'; }
         else close();
@@ -461,6 +482,8 @@
         `<b>${b.tempo} BPM, ${T.meterText(b.meter)}</b> <span class="dim">(the project’s tempo and time signature)</span></label>` +
         `<label><input type="checkbox" id="svwOptMarkers" ${store.get('optMarkers', true) ? 'checked' : ''}> Add section markers: ` +
         `<b>${marks.map(m => `${esc(m.name)} (bar ${m.bar})`).join(', ')}</b> <span class="dim">(arranger cue markers; skipped while playing)</span></label></div>` : '') +
+      (groups.length ? '<p><b>Groups:</b> once the tracks appear, click into Bitwig’s window: its Group command only works while ' +
+        'Bitwig is in front (Score View waits for that click).</p>' : '') +
       '<p>Large libraries take a while to load; Bitwig\'s track selection moves while the wizard works. Every step is a normal ' +
       'Bitwig change, so <b>Edit → Undo</b> in Bitwig removes them again (one step at a time).</p>' +
       '<p class="dim">Tip: try it in a new, empty project first (File → New in Bitwig).</p>';
@@ -481,6 +504,9 @@
         q('#svwMsg').textContent = s.message || '';
         q('#svwStep').textContent = s.steps ? `Step ${s.step} of ${s.steps}` : '';
         q('#svwBar').style.width = (s.steps ? Math.round(100 * s.step / s.steps) : 0) + '%';
+        // NewScoreWizard.groupAttempt: Group only acts while Bitwig has the focus; the job retries until the user clicks there
+        q('#svwFocus').hidden = !s.waitFocus;
+        q('#svwFocusGroup').textContent = s.waitFocus ? '“' + s.waitFocus + '”' : '';
       });
     } catch (err) {
       st = { state: 'error', message: err.message, tracks: [], groups: [], settings: [], errors: [err.message], notes: [] };
@@ -510,8 +536,12 @@
     const bars = b && b.form ? T.formBars(b.form) : 8;
     const markers = [];
     if (b && b.form) { let bar = 0; b.form.forEach(([name, n]) => { markers.push({ beat: bar * barBeats, name }); bar += Math.max(1, n | 0); }); }
-    SV.newScore({ title: t ? t.name : 'New score', timeSig: ts, lengthBeats: bars * barBeats, markers,
-      parts: made.map(r => ({ name: r.name, group: r.group || undefined })) });
+    const fresh = { title: t ? t.name : 'New score', timeSig: ts, lengthBeats: bars * barBeats, markers };
+    // Stored like a read of the project (features/arrangement.js), so it comes back after F5 without a Read.
+    const adopted = SV.arrangement && SV.arrangement.adoptNew && SV.arrangement.adoptNew(fresh);
+    if (!adopted) SV.newScore({ ...fresh, parts: made.map(r => ({ name: r.name, group: r.group || undefined })) });
+    else if (SV.core.setScoreShow) SV.core.setScoreShow('all');
+    if (SV.state.view !== 'score' && SV.core.setMode) SV.core.setMode('score');
   }
 
   /** Remembers each created track's notation instrument (instruments.js override) when the name alone would not find it. */

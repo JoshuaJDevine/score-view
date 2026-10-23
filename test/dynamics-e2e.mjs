@@ -98,6 +98,42 @@ await withPage({ port }, async ({ page, srv, errors }) => {
   assert.equal(d.tracks['Violin 1'].hairpins.filter(h => h.shape === 'late').length, 1);
   ok('hairpin popover: own shape (Late swell)');
 
+  // ---- a new note under the p gets a (humanized) p velocity by itself
+  {
+    const before = srv.edits.length;
+    const slot = await page.evaluate(() => {
+      const d = SV.state.liveData, spb = d.stepsPerBeat;
+      const p = SV.dynamics.doc().tracks['Violin 1'].marks.find(m => m.text === 'p');
+      return { x: Math.round(p.beat * spb) + spb / 2 + 1, y: 100 }; // between notes, a pitch nothing else uses
+    });
+    await wait(900); // a settled state first: new notes are those that appear after it
+    await page.evaluate(s => SV.send([`add 0 ${s.x} ${s.y} 127 0.25`]), slot);
+    await page.waitForFunction(() => SV.state.liveData.notes.some(n => n.y === 100), { timeout: 5000 });
+    for (let t = 0; t < 30 && !srv.edits.slice(before).some(e => e.startsWith('vel 0 ' + slot.x + ' ' + slot.y + ' ')); t++) await wait(100); // judged on settled data (600 ms)
+    const vel = srv.edits.slice(before).find(e => e.startsWith(`vel 0 ${slot.x} ${slot.y} `));
+    assert.ok(vel, 'the new note got a velocity from the dynamic: ' + srv.edits.slice(before).join(' | '));
+    const v = Math.round(parseFloat(vel.split(' ')[4]) * 127);
+    assert.ok(v < 90, 'a p-ish velocity, not the 127 it was entered with: ' + v);
+    ok(`a new note under the p follows it (velocity ${v})`);
+  }
+
+  // ---- a dynamic entered at a guessed clip position moves once the clip plays (playhead - step is exact)
+  {
+    const ident = await page.evaluate(() => { const d = SV.state.liveData; return [d.length, d.loopStart, d.loopLength].join('|'); });
+    await page.evaluate(ck => {
+      const d = SV.dynamics.doc();
+      d.tracks['Violin 1'].marks.push({ id: 'guess1', beat: 8.5 + 2, text: 'mf', clip: 8.5, co: 8.5, ck, or: 0 });
+      SV.dynamics.setDoc(d);
+    }, ident);
+    srv.setPlay({ playing: true, step: 24 * 6, pos: 6.07, tempo: 120 });
+    await page.waitForFunction(() => SV.dynamics.doc().tracks['Violin 1'].marks.find(m => m.id === 'guess1').beat === 2, { timeout: 5000 });
+    srv.setPlay({ playing: false, step: -1, pos: 6, tempo: 120 });
+    await wait(200);
+    assert.equal(stored().tracks['Violin 1'].marks.find(m => m.id === 'guess1').co, 0, 'saved at the real clip start');
+    ok('a guessed clip position is corrected when the clip plays');
+    await page.evaluate(() => { const d = SV.dynamics.doc(); d.tracks['Violin 1'].marks = d.tracks['Violin 1'].marks.filter(m => m.id !== 'guess1'); SV.dynamics.setDoc(d); });
+  }
+
   // ---- reload: the marks come back from the project
   await wait(300);
   await page.reload({ waitUntil: 'domcontentloaded' });

@@ -13,7 +13,9 @@ family / section.
 - localStorage `scoreview.sections.*`.
 
 ## Hooks
-`visibleTracks`, `transformScore`, `buildOptions`, `afterRender`, `liveData`. Reads `SV.instruments`; calls
+`visibleTracks`, `transformScore`, `buildOptions`, `afterRender` (turns the group labels vertical; marks each turned
+label `data-sv-rotated`, so a kept chunk is not turned twice; a system in an off-screen chunk is turned when it comes
+into view, `SV.core.whenShown`), `liveData`. Reads `SV.instruments`; calls
 `SV.renderTrackList()`.
 
 ## Tests

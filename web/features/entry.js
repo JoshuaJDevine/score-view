@@ -1376,11 +1376,7 @@
     const ctrl = e.ctrlKey || e.metaKey;
     const k = e.key, code = e.code || '';
     if (!ctrl && !e.altKey && !e.shiftKey && (k === 'n' || k === 'N')) { setOn(!E.on); return true; }
-    if (!E.on) {
-      // Ctrl+↑/↓ (Sibelius): octave on the selected notes.
-      if (ctrl && !e.altKey && !e.shiftKey && (k === 'ArrowUp' || k === 'ArrowDown')) return octaveSelection(k === 'ArrowUp' ? 1 : -1);
-      return false;
-    }
+    if (!E.on) return false; // outside note entry the arrow keys follow the keymap (core/keyboard.js)
     if (k === 'Escape' && !prefBox.classList.contains('hidden')) { togglePrefs(false); return true; }
     const act = keyAction(prefs.layout, { key: k, code, shift: e.shiftKey, alt: e.altKey, ctrl }, { rowIntervals: prefs.rowIntervals });
     if (act) {
@@ -1464,7 +1460,7 @@
     R(['Shift+A', 'Shift+B', 'Shift+C', 'Shift+D', 'Shift+E', 'Shift+F', 'Shift+G'], 'add a note to the chord', 'entry', 'Shift+A–G');
     R(['2', '3', '4', '5', '6', '7', '8', '9'].flatMap(k => ['Alt+' + k, 'Alt+Shift+' + k]),
       'add an interval above the last note (Shift: below): 3 = third … 8 = octave', 'entry', 'Alt+2–9 / Alt+Shift+2–9');
-    R(['Ctrl+ArrowUp', 'Ctrl+ArrowDown'], 'octave up / down (the last entered or the selected notes)', 'always');
+    R(['Ctrl+ArrowUp', 'Ctrl+ArrowDown'], 'octave up / down (the last entered or the selected notes)', 'entry');
     R(['Ctrl+ArrowLeft', 'Ctrl+ArrowRight'], 'caret to the previous / next bar');
     R('R', 'repeat the last note or chord');
     R(['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8'], 'insert a rhythm cell', 'entry', 'F1–F8');

@@ -183,7 +183,7 @@
     const writes = new Map();
     for (const n of [...notes].sort((a, b) => a.start - b.start)) {
       const s = spans.find(sp => sp.clip.start <= n.start + EPS && n.start < sp.end - EPS);
-      if (!s) return { track, error: `No clip on ${track} at bar ${barOf(n.start, measureBeats)} — create one in Bitwig (or lengthen it), then Read arrangement again` };
+      if (!s) return { track, error: `No clip on ${track} at bar ${barOf(n.start, measureBeats)} — create one in Bitwig (or lengthen it), then Read project again` };
       const c = s.clip;
       if (s.end > firstPassEnd(c) + EPS) {
         return { track, error: `The clip on ${track} at bar ${barOf(c.start, measureBeats)} loops — notes written into it would repeat in every pass. Consolidate it (or turn its loop off) in Bitwig first` };
@@ -371,8 +371,21 @@
     let t;
     try { t = await (await fetch('/api/transport', { cache: 'no-store' })).json(); } catch (e) { return null; }
     if (t.playing) return 'Stop playback first';
-    const ok = crawl.result.some(c => c.track === d.track && Math.abs(c.start - t.playStart) < 1e-4);
-    return ok ? null : `Click the ${d.track} clip in Bitwig again (Score View finds its way back to it by the play start marker), or Read arrangement again`;
+    let ok = crawl.result.some(c => c.track === d.track && Math.abs(c.start - t.playStart) < 1e-4);
+    if (!ok) {
+      // A note click ("Click sets playhead", features/playback.js) leaves the marker inside the clip: put it back on
+      // the clip's start so the navigator can find its way home.
+      const ends = crawl.result.filter(c => c.track === d.track).sort((a, b) => a.start - b.start);
+      const c = ends.find((c, i) => c.start < t.playStart && t.playStart < clipEndFn()(c, ends[i + 1]) - 1e-4);
+      if (c) {
+        SV.send(['position ' + c.start]);
+        for (let i = 0; i < 20 && !ok; i++) {
+          await new Promise(r => setTimeout(r, 50));
+          try { ok = Math.abs((await (await fetch('/api/transport', { cache: 'no-store' })).json()).playStart - c.start) < 1e-4; } catch (e) { break; }
+        }
+      }
+    }
+    return ok ? null : `Click the ${d.track} clip in Bitwig again (Score View finds its way back to it by the play start marker), or Read project again`;
   }
 
   /**
@@ -383,7 +396,7 @@
   async function writeTracks(results, opts = {}) {
     if (busy) return { error: 'Orchestrate is busy' };
     const crawl = crawlOk();
-    if (!crawl) return { error: 'Read the arrangement first (⟳ Read arrangement)' };
+    if (!crawl) return { error: '⟳ Read project first' };
     if (!live()) return { error: 'Not connected to Bitwig' };
     const plans = planAll({ results });
     const bad = plans.filter(p => p.error && !p.empty);
@@ -432,7 +445,7 @@
   async function apply(opts) {
     if (busy) return { error: 'busy' };
     const crawl = crawlOk();
-    if (!crawl) return report({ error: 'Read the arrangement first (⟳ Read arrangement): orchestration writes through its clip list' });
+    if (!crawl) return report({ error: '⟳ Read project first: orchestration writes through its clip list' });
     const src = opts.source === 'staves' ? stavesSource(opts.staves || [], opts.fromBar, opts.toBar) : selectedSource();
     if (src.error) return report(src);
     const computed = compute(opts.op, src, opts);
@@ -550,7 +563,7 @@
       if (br && br !== last) { html += `<div class="orc-grp">${esc(br)}</div>`; last = br; }
       html += `<label title="${esc(t)}"><input type="checkbox" data-${id}="${esc(t)}" ${checked.includes(t) ? 'checked' : ''}> ${esc(t)}</label>`;
     });
-    return html || '<div class="orc-grp">No tracks with clips — Read arrangement first</div>';
+    return html || '<div class="orc-grp">No tracks with clips — Read project first</div>';
   }
 
   function renderPanel() {
@@ -617,7 +630,7 @@
     const box = q('#orcPreview');
     if (!box) return;
     const o = options();
-    if (!crawlOk()) { box.innerHTML = '<span class="bad">Read the arrangement first (⟳ Read arrangement).</span>'; return; }
+    if (!crawlOk()) { box.innerHTML = '<span class="bad">⟳ Read project first.</span>'; return; }
     const src = o.source === 'staves' ? stavesSource(o.staves, o.fromBar, o.toBar) : selectedSource();
     if (src.error) { box.innerHTML = `<span class="bad">${esc(src.error)}</span>`; return; }
     const c = compute(o.op, src, o);
@@ -708,7 +721,7 @@
     SV.shortcuts.register({ keys: 'Escape', owner: 'orchestrate', desc: 'close the Orchestrate panel', when: 'Orchestrate panel' });
   }
   SV.addHelp('Orchestrate: <kbd>Alt</kbd>+<kbd>X</kbd> explode chord to instruments · <kbd>Alt</kbd>+<kbd>B</kbd> double line · '
-    + '<kbd>Alt</kbd>+<kbd>U</kbd> reduce staves (writes into other tracks\' clips; needs ⟳ Read arrangement)');
+    + '<kbd>Alt</kbd>+<kbd>U</kbd> reduce staves (writes into other tracks\' clips; needs ⟳ Read project)');
 
   // rebuildBase / isBusy are shared with features/passage.js (copy/paste between staves writes through the same crawl).
   root.SV.orchestrate = { ...Core, apply, writeTracks, open, close, compute, planAll, lastReport: () => lastReport,

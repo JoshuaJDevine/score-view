@@ -178,6 +178,9 @@
 
     // Technique text only where it changes.
     const marks = [], slurs = [];
+    // A keyswitch on its note's attack does not fire (the note keeps the previous articulation): flag it.
+    const late = lateKeyswitches(mus, ks, map);
+    [...new Set(late.map(l => l.note.start))].forEach(b => marks.push({ beat: b, text: '⚠ ks', kind: 'dir', late: true }));
     const brass = family === 'brass';
     const st = { play: null, mute: false, label: null };
     groups.forEach(g => {
@@ -197,10 +200,11 @@
       if (d.dyn) marks.push({ beat: g.start, text: d.dyn, kind: 'dynam', sfz: true });
     });
 
-    // Slurs over consecutive legato notes; a rest (gap over a 16th) or another articulation breaks them.
+    // Slurs over consecutive legato notes (opts.slurs, default true; the page's setting slurLegato is off by default:
+    // phrasing slurs are the composer's); a rest (gap over a 16th) or another articulation breaks them.
     let run = [];
     const flush = () => {
-      if (run.length > 1) {
+      if (run.length > 1 && opts.slurs !== false) {
         const top = g => g.notes.reduce((a, b) => (b.pitch > a.pitch ? b : a));
         slurs.push({ start: top(run[0]).id, end: top(run[run.length - 1]).id });
       }
@@ -214,7 +218,7 @@
       run.push(g);
     });
     flush();
-    return { notes, marks, slurs, arts, descs };
+    return { notes, marks, slurs, arts, descs, late };
   }
 
   // ------------------------------------------------------------------ dynamics
@@ -366,10 +370,63 @@
    *   "arco"); later articulation changes stay, a later switch to the same articulation is removed as redundant.
    * mode 'only': only the selected notes change; the previous articulation is restored for the note after them.
    */
-  function planWriteBack(notes, spb, selected, key, map, mode = 'from') {
+  /**
+   * Where a keyswitch for a note at step x goes: an eighth of a beat before it, after the previous note's start (+ the
+   * tolerance, so it is not read as the previous note's) and not before the clip's first played step minX; squeezed,
+   * one step before the note. Never on the note itself (a keyswitch at the same moment as its note does not fire: BBC
+   * SO in Bitwig, tested 2026-10-17), except when there is no room at all (the clip's first note): then x, with late.
+   * -> { x, late }
+   */
+  function keyswitchSlot(x, prevX, spb, minX = 0) {
+    const tol = Math.max(1, Math.round(spb * TOL)), lead = Math.max(1, Math.round(spb / 8));
+    const lo = Math.max(minX, prevX == null ? -Infinity : prevX + 1);
+    let k = Math.max(x - lead, prevX == null ? -Infinity : prevX + tol + 1, minX);
+    if (k >= x) k = x - 1;
+    if (k < lo) return { x, late: true };
+    return { x: k, late: false };
+  }
+
+  /**
+   * Keyswitches that will not fire for the note they are meant for: at the same moment as it or just after (within
+   * TOL), and changing the articulation. keyswitches/notes: [{id, start, pitch}] (beats). -> [{ks, note}]
+   */
+  function lateKeyswitches(notes, keyswitches, map) {
+    const ks = (keyswitches || []).filter(k => map[k.pitch] != null).slice().sort((a, b) => a.start - b.start);
+    const mus = notes.slice().sort((a, b) => a.start - b.start);
+    const out = [];
+    ks.forEach((k, i) => {
+      const note = mus.find(n => n.start + TOL >= k.start);
+      if (!note || k.start < note.start - 1e-6) return;
+      const before = ks.slice(0, i).filter(o => o.start < note.start - 1e-6).pop();
+      if (!before || map[before.pitch] !== map[k.pitch]) out.push({ ks: k, note });
+    });
+    return out;
+  }
+
+  /**
+   * Moves keyswitches that sit on (or just after) their note to keyswitchSlot. notes: live clip notes [{ch, x, y}].
+   * -> { ops: ['move …'], stuck: n (no room: the clip's first note) }
+   */
+  function planKeyswitchFix(notes, spb, map, minX = 0) {
+    const tol = Math.max(1, Math.round(spb * TOL));
+    const ks = notes.filter(n => n.y < KS_MAX && map[n.y] != null);
+    const mus = notes.filter(n => n.y >= KS_MAX).sort((a, b) => a.x - b.x);
+    const ops = [];
+    let stuck = 0;
+    ks.forEach(k => {
+      const o = mus.find(n => n.x + tol >= k.x);
+      if (!o || k.x < o.x) return;
+      const prev = mus.filter(n => n.x < o.x).pop();
+      const slot = keyswitchSlot(o.x, prev ? prev.x : null, spb, minX);
+      if (slot.late) { stuck++; return; }
+      if (!ks.some(q => q !== k && q.x === slot.x && q.y === k.y)) ops.push(`move ${k.ch} ${k.x} ${k.y} ${slot.x - k.x} 0`);
+    });
+    return { ops, stuck };
+  }
+
+  function planWriteBack(notes, spb, selected, key, map, mode = 'from', opts = {}) {
     const idOf = n => 'L' + n.ch + '_' + n.x + '_' + n.y;
     const tol = Math.max(1, Math.round(spb * TOL));
-    const lead = Math.max(1, Math.round(spb / 8));
     const ks = notes.filter(n => n.y < KS_MAX && map[n.y] != null).sort((a, b) => a.x - b.x);
     const mus = notes.filter(n => n.y >= KS_MAX).sort((a, b) => a.x - b.x || a.y - b.y);
     const sel = mus.filter(n => selected.has(idOf(n)));
@@ -381,7 +438,8 @@
     const rest = ks.filter(k => !inside.includes(k));
     const ops = inside.map(k => `del ${k.ch} ${k.x} ${k.y}`);
     const ch = sel[0].ch;
-    const place = (x, prevX) => Math.min(x, Math.max(prevX == null ? 0 : prevX + tol + 1, x - lead, 0));
+    let late = false;
+    const place = (x, prevX) => { const s = keyswitchSlot(x, prevX, spb, opts.minX || 0); if (s.late) late = true; return s.x; };
     const before = mus.filter(n => n.x < x0);
     if (keyAt(x0, rest) !== key) {
       // Reuse the position of the switch the first note already had (the user's own placement), else just before it.
@@ -395,6 +453,7 @@
       // Latch: nothing to restore. The next switch after the selection is redundant if it is the same articulation.
       const later = rest.filter(k => { const o = owner(k); return o && o.x > xLast; });
       if (later.length && later[0].y === key) ops.push(`del ${later[0].ch} ${later[0].x} ${later[0].y}`);
+      if (opts.report) opts.report.late = late;
       return ops;
     }
     const next = mus.find(n => n.x > xLast);
@@ -404,6 +463,7 @@
       if (!own.length && was != null && was !== key) ops.push(`add ${next.ch} ${place(next.x, xLast)} ${was} 100 0.25`);
       else if (own.length && own.every(k => k.y === key)) own.forEach(k => ops.push(`del ${k.ch} ${k.x} ${k.y}`)); // now redundant
     }
+    if (opts.report) opts.report.late = late;
     return ops;
   }
 
@@ -430,6 +490,7 @@
   }
 
   const api = { PRESETS, KS_MAX, classify, resolve, annotate, deriveDynamics, curveFn, levelCurve, planWriteBack,
+                keyswitchSlot, lateKeyswitches, planKeyswitchFix,
                 keyForIntent, presetFor, bandOf, DYN_NAMES };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   const SV = root.SV;
@@ -442,7 +503,8 @@
     get(k, d) { try { const v = root.localStorage && root.localStorage.getItem(KEY + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
     set(k, v) { try { if (root.localStorage) root.localStorage.setItem(KEY + k, JSON.stringify(v)); } catch (e) { /* ignore */ } },
   };
-  const settings = Object.assign({ show: true, dynamics: true, velocity: true, palette: true, heldRevert: false, onlySelected: false }, store.get('settings', {}));
+  const settings = Object.assign({ show: true, dynamics: true, velocity: true, clickPalette: false, heldRevert: false, onlySelected: false,
+    slurLegato: false }, store.get('settings', {}));
   const overrides = store.get('overrides', {}); // track -> { preset?: id | 'none', map?: {key: name} }
   const saveSettings = () => store.set('settings', settings);
   const saveOverrides = () => store.set('overrides', overrides);
@@ -494,7 +556,7 @@
       const info = mapFor(part.name, part);
       const p = Object.assign({}, part);
       if (settings.show && info.map) {
-        const r = annotate(part, info.map, { family: info.family, heldRevert: settings.heldRevert });
+        const r = annotate(part, info.map, { family: info.family, heldRevert: settings.heldRevert, slurs: settings.slurLegato });
         p.notes = r.notes;
         p.marks = (p.marks || []).concat(r.marks);
         p.slurs = (p.slurs || []).concat(r.slurs);
@@ -519,6 +581,23 @@
 
   function liveTrackName() { const d = SV.state.liveData; return d && d.exists ? d.track : null; }
 
+  // The clip's first played step (notes before the visible start do not play, so a keyswitch cannot go there).
+  const clipFirstStep = d => Math.max(0, Math.ceil(((d && d.playStart) || 0) * ((d && d.stepsPerBeat) || 24) - 1e-6));
+  const LATE_MSG = 'The first note of the clip: Bitwig cannot send its keyswitch before it, so the library plays the previous '
+    + 'articulation for this note (⚠ ks in the score). Start the clip with some empty space.';
+
+  /** Moves the live clip's keyswitches that sit on their notes a little earlier (Articulations ▾). */
+  function fixKeyswitches() {
+    const d = SV.state.liveData;
+    if (!d || !d.exists) { SV.flash('Select a clip first'); return; }
+    const info = mapFor(d.track);
+    if (!info.map) { SV.flash('No articulation map for ' + d.track); return; }
+    const r = planKeyswitchFix(d.notes, d.stepsPerBeat || 24, info.map, clipFirstStep(d));
+    if (r.ops.length) SV.send(r.ops);
+    SV.flash((r.ops.length ? `Moved ${r.ops.length} keyswitch${r.ops.length > 1 ? 'es' : ''} just before their notes` : 'No keyswitch needed moving')
+      + (r.stuck ? ` · ${r.stuck} on the clip's first note cannot fire: start the clip with some empty space` : ''), { kind: r.stuck ? 'warn' : 'ok', ms: 7000 });
+  }
+
   function apply(key, label) {
     const d = SV.state.liveData;
     if (!d || !d.exists) return false;
@@ -526,10 +605,13 @@
     if (!info.map) { SV.flash('No articulation map for ' + d.track); return true; }
     const sel = new Set([...SV.state.selection].filter(id => SV.isLive(id) && SV.parseId(id).y >= KS_MAX));
     if (!sel.size) { SV.flash('Select notes of the live clip first'); return true; }
-    const ops = planWriteBack(d.notes, d.stepsPerBeat || 24, sel, key, info.map, settings.onlySelected ? 'only' : 'from');
+    const spb = d.stepsPerBeat || 24;
+    const report = {};
+    const ops = planWriteBack(d.notes, spb, sel, key, info.map, settings.onlySelected ? 'only' : 'from', { minX: clipFirstStep(d), report });
     if (!ops.length) { SV.flash((label || info.map[key]) + ' already'); return true; }
     SV.send(ops);
-    SV.flash(settings.onlySelected ? info.map[key] + ' → ' + sel.size + ' note' + (sel.size > 1 ? 's' : '')
+    if (report.late) SV.flash(LATE_MSG, { kind: 'warn', ms: 9000 });
+    else SV.flash(settings.onlySelected ? info.map[key] + ' → ' + sel.size + ' note' + (sel.size > 1 ? 's' : '')
       : info.map[key] + ' from here on (until the next articulation change)');
     closePalette();
     return true;
@@ -568,7 +650,8 @@
     keys: 'Shift+' + code.slice(3), owner: 'articulations', desc: INTENT_NAMES[SHORTCUTS[code]] + ' on the selected notes (again: next variant)', when: 'normal',
   }));
 
-  SV.articulations = Object.assign({}, api, { settings, overrides, mapFor, transform, apply, saveOverrides, saveSettings });
+  SV.articulations = Object.assign({}, api, { settings, overrides, mapFor, transform, apply, saveOverrides, saveSettings,
+    fixKeyswitches: () => fixKeyswitches() });
 
   // ------------------------------------------------------------------ UI
 
@@ -637,11 +720,14 @@
       return `<div class="sva-row" data-track="${esc(n)}"><span>${esc(n)}</span><span class="src ${info.source === 'custom' ? 'custom' : ''}">${esc(info.source || 'none')}</span></div>`;
     }).join('') || '<div class="hint">No tracks shown</div>';
     pop.innerHTML = '<h4>Articulations</h4>' +
+      '<button class="btn" id="svaPalBtn" title="Shift+K">Palette for the selected notes</button> ' +
+      '<button class="btn" id="svaFixKs" title="A keyswitch on its note\'s attack does not fire (⚠ ks in the score): move those a little earlier">Fix keyswitch timing</button>' +
       opt('show', 'Show articulations from keyswitches', 'Dots, accents, tremolo, slurs and technique text from keyswitch notes') +
       opt('dynamics', 'Dynamics and hairpins', 'From the export\'s Dynamics/Expression automation (CC1/CC11), else velocity') +
       opt('velocity', 'Use velocity when there is no automation') +
-      opt('palette', 'Articulation palette on note click') +
+      opt('clickPalette', 'Also open the palette on note click', 'Off (default): Shift+K opens it for the selected notes') +
       opt('onlySelected', 'Apply to the selected notes only', 'Off (default): the articulation holds from the selected note on, like a part') +
+      opt('slurLegato', 'Slur legato passages', 'Off (default): legato keyswitches draw no slurs; add phrasing yourself') +
       opt('heldRevert', 'Held keyswitches end at release', 'Off: every keyswitch latches until the next one (BBC SO)') +
       '<h4>Tracks</h4><div class="sva-tracks">' + rows + '</div><div class="sva-edit"></div>' +
       '<div class="hint">Click a track to edit its keyswitch table. A full .dawproject export (with plugins/) provides the exact BBC SO tables.<br>' +
@@ -656,6 +742,8 @@
       saveSettings();
       SV.render();
     });
+    pop.querySelector('#svaPalBtn').addEventListener('click', () => { closePop(); paletteForSelection(); });
+    pop.querySelector('#svaFixKs').addEventListener('click', () => { closePop(); fixKeyswitches(); });
     pop.querySelector('.sva-tracks').addEventListener('click', e => {
       const row = e.target.closest('.sva-row');
       if (row) openEditor(row.dataset.track);
@@ -728,8 +816,26 @@
     const r = el.getBoundingClientRect();
     placeAt(pal, r.left - 10, r.top - pal.getBoundingClientRect().height - 18);
   }
+  // Shift+K (or the Articulations menu): the palette at the first selected live note.
+  function paletteForSelection() {
+    const r = SV.state.render;
+    const t = r && [...SV.state.selection].filter(id => SV.isLive(id)).map(id => (r.bySrc.get(id) || [])[0]).filter(Boolean)
+      .sort((a, b) => a.start - b.start)[0];
+    const el = t && document.getElementById(t.svgId);
+    if (!el) { SV.flash('Articulations: select notes of the live clip first (then Shift+K)'); return; }
+    const d = SV.state.liveData;
+    if (!d || !d.exists || !mapFor(d.track).map) { SV.flash('No articulation map for ' + ((d && d.track) || 'this track')); return; }
+    openPalette(el);
+  }
+  SV.hooks.keydown.push(e => {
+    if (!e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.code !== 'KeyK') return false;
+    if (SV.entry && SV.entry.state && SV.entry.state.on) return false;
+    if (pal) closePalette(); else paletteForSelection();
+    return true;
+  });
+  if (SV.shortcuts) SV.shortcuts.register({ keys: 'Shift+K', owner: 'articulations', when: 'normal', desc: 'articulation palette for the selected notes' });
   SV.hooks.noteClick.push((t, e) => {
-    if (!settings.palette || !SV.isLive(t.srcId) || e.button !== 0) return false;
+    if (!settings.clickPalette || !SV.isLive(t.srcId) || e.button !== 0) return false;
     if (SV.entry && SV.entry.state && SV.entry.state.on) return false;
     const el = document.getElementById(t.svgId);
     setTimeout(() => { if (el && el.isConnected) openPalette(el); }, 0);
@@ -744,7 +850,55 @@
     if (el) openPalette(el); else closePalette();
   });
 
+  // ---- articulation-map Note FX on the selected track (e.g. JSONBach's "BBCSO String Articulations"): it sends its own
+  // keyswitch (its selector, Legato by default) before every note, so keyswitch notes in the clip last one note.
+  const isMapDevice = name => /articulation/i.test(name || '');
+  const dismissedMaps = new Set(); // "track|device" closed for this session
+  function activeMaps(d) {
+    const dv = d && d.devices;
+    if (!dv || !d.exists || dv.track !== d.track) return [];
+    return (dv.list || []).filter(x => x.on && isMapDevice(x.name));
+  }
+  SV.addStyle(`
+    #svaMapWarn { display: flex; align-items: center; gap: 10px; padding: 6px 12px; font-size: 12px; background: #4a3a12; color: #ffe6a6;
+                  border-bottom: 1px solid #7a5d1a; }
+    #svaMapWarn.hidden { display: none; }
+    #svaMapWarn b { color: #fff; }
+    #svaMapWarn .btn { padding: 2px 10px; }
+    #svaMapWarn .sva-x { margin-left: auto; background: none; border: 0; color: inherit; cursor: pointer; font-size: 14px; }
+  `);
+  const warn = document.createElement('div');
+  warn.id = 'svaMapWarn';
+  warn.className = 'hidden';
+  const mainEl = document.getElementById('main');
+  if (mainEl) mainEl.parentNode.insertBefore(warn, mainEl);
+  let warnKey = null;
+  function refreshMapWarning() {
+    const d = SV.state.liveData;
+    const maps = activeMaps(d).filter(m => !dismissedMaps.has(d.track + '|' + m.name));
+    const key = maps.length ? d.track + '|' + maps.map(m => m.index + m.name).join(',') : null;
+    if (key === warnKey) return;
+    warnKey = key;
+    if (!maps.length) { warn.classList.add('hidden'); warn.innerHTML = ''; return; }
+    warn.classList.remove('hidden');
+    const names = maps.map(m => '“' + esc(m.name) + '”').join(', ');
+    warn.innerHTML = `<span>⚠ ${names} on <b>${esc(d.track)}</b> sends its own keyswitch before every note, so articulations `
+      + 'written in the clip (Score View, or BBC SO\'s own buttons) last only one note.</span>'
+      + '<button class="btn" id="svaMapOff" title="Switches the device off in Bitwig (switch it on again in the device chain)">Turn the map off</button>'
+      + '<button class="sva-x" id="svaMapDismiss" title="Keep the map (this session)">✕</button>';
+    warn.querySelector('#svaMapOff').addEventListener('click', () => {
+      SV.send(maps.map(m => `deviceOn ${m.index} 0`));
+      SV.flash(`${names.replace(/[“”]/g, '')} switched off on ${d.track}: keyswitches in the clip now latch`, { kind: 'ok' });
+    });
+    warn.querySelector('#svaMapDismiss').addEventListener('click', () => {
+      maps.forEach(m => dismissedMaps.add(d.track + '|' + m.name));
+      refreshMapWarning();
+    });
+  }
+  SV.hooks.liveData.push(() => refreshMapWarning());
+  SV.articulations.activeMaps = activeMaps;
+
   SV.addHelp('Articulations: <kbd>Shift</kbd>+<kbd>S</kbd> staccato (again: spiccato…) · <kbd>Shift</kbd>+<kbd>U</kbd> legato · ' +
     '<kbd>Shift</kbd>+<kbd>I</kbd> pizz. · <kbd>Shift</kbd>+<kbd>T</kbd> tremolo · <kbd>Shift</kbd>+<kbd>A</kbd> accent · ' +
-    '<kbd>Shift</kbd>+<kbd>N</kbd> long/arco · <kbd>Shift</kbd>+<kbd>R</kbd> trill (writes keyswitch notes into the clip)');
+    '<kbd>Shift</kbd>+<kbd>N</kbd> long/arco · <kbd>Shift</kbd>+<kbd>R</kbd> trill (writes keyswitch notes into the clip) · <kbd>Shift</kbd>+<kbd>K</kbd> palette');
 })(typeof window !== 'undefined' ? window : this);

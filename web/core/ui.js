@@ -24,14 +24,27 @@
     document.querySelectorAll('#' + segId + ' button').forEach(b => b.classList.toggle('on', b.dataset[attr] === value));
   }
 
-  function setMode(m) {
-    state.mode = m;
-    store.set('mode', m);
-    markSeg('modeSeg', 'mode', m);
-    document.querySelectorAll('.scoreOnly').forEach(el => el.classList.toggle('hidden', m !== 'score'));
-    state.selection.clear();
-    state.playBeat = -1;
+  // The two views (state.view, the Clip / Score buttons) drive the engine's mode, range and track choice:
+  //   Score view: the whole song, all instruments or only the pinned ones (state.scoreShow) -> mode score, range all.
+  //   Clip view: the selected clip; with other tracks pinned, their staves too in the clip's bars -> mode score,
+  //   range clip, pinned tracks (needs a Read for their notes); with none, the plain clip -> mode clip.
+  function applyView() {
+    const cur = C.currentTrack ? C.currentTrack() : null;
+    let mode;
+    if (state.view === 'score') { mode = 'score'; state.range = 'all'; state.trackMode = state.scoreShow === 'pinned' ? 'pinned' : 'all'; }
+    else if ([...state.pinned].some(n => n !== cur)) { mode = 'score'; state.range = 'clip'; state.trackMode = 'pinned'; }
+    else mode = 'clip';
+    if (mode !== state.mode) { state.mode = mode; state.selection.clear(); state.playBeat = -1; }
+    store.set('mode', mode);
+    markSeg('modeSeg', 'mode', state.view);
+    document.querySelectorAll('.scoreOnly').forEach(el => el.classList.toggle('hidden', state.view !== 'score'));
+    if (C.renderTrackList) C.renderTrackList();
     C.requestRender();
+  }
+  function setMode(v) {
+    state.view = v === 'score' ? 'score' : 'clip';
+    store.set('view', state.view);
+    applyView();
   }
 
   $('modeSeg').addEventListener('click', e => { if (e.target.dataset.mode) setMode(e.target.dataset.mode); });
@@ -48,15 +61,15 @@
     markSeg('layoutSeg', 'layout', l);
     C.requestRender();
   });
-  $('rangeSeg').addEventListener('click', e => {
-    const r = e.target.dataset.range;
-    if (!r) return;
-    state.range = r;
-    store.set('range', r);
-    markSeg('rangeSeg', 'range', r);
-    C.requestRender();
-  });
-  ['keySel', 'gridSel', 'condense', 'hideKs', 'simplify'].forEach(id => $(id).addEventListener('change', () => C.requestRender()));
+
+  ['keySel', 'gridSel', 'condense', 'hideKs', 'simplify', 'interpret'].forEach(id => $(id).addEventListener('change', () => C.requestRender()));
+  // Hide unused instruments (saved) and the status bar's All staves override (this session).
+  $('hideUnused').checked = store.get('hideUnused', true);
+  $('hideUnused').addEventListener('change', () => { store.set('hideUnused', $('hideUnused').checked); C.requestRender(); });
+  const allBtn = $('allStaves');
+  const paintAll = () => { allBtn.classList.toggle('on', !!state.showAllStaves); allBtn.textContent = state.showAllStaves ? 'All staves ✓' : 'All staves'; };
+  allBtn.addEventListener('click', () => { state.showAllStaves = !state.showAllStaves; paintAll(); C.requestRender(); allBtn.blur(); });
+  paintAll();
   let zoomTimer;
   $('zoom').addEventListener('input', () => { clearTimeout(zoomTimer); zoomTimer = setTimeout(C.requestRender, 120); });
   let resizeTimer;
@@ -65,26 +78,10 @@
     resizeTimer = setTimeout(() => { if (Math.abs($('main').clientWidth - C.lastW) > 30) { C.lastW = $('main').clientWidth; C.requestRender(); } }, 200);
   });
 
-  $('openBtn').addEventListener('click', () => C.openBase());
   $('freshBtn').addEventListener('click', () => C.freshScoreFromTracks());
-  $('reconnectBtn').addEventListener('click', async () => {
-    const h = state.baseHandle;
-    if (h && await h.requestPermission({ mode: 'read' }) === 'granted') C.loadBaseFile(await h.getFile());
-  });
-  $('fileInput').addEventListener('change', e => { if (e.target.files[0]) { state.baseHandle = null; C.loadBaseFile(e.target.files[0]); } });
-  let dragDepth = 0;
-  document.addEventListener('dragenter', e => { e.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
-  document.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
-  document.addEventListener('dragover', e => e.preventDefault());
-  document.addEventListener('drop', async e => {
-    e.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging');
-    const item = e.dataTransfer.items && e.dataTransfer.items[0];
-    if (item && item.getAsFileSystemHandle) {
-      const h = await item.getAsFileSystemHandle();
-      if (h && h.kind === 'file') { state.baseHandle = h; C.idb.set('base', h); C.loadBaseFile(await h.getFile()); return; }
-    }
-    if (e.dataTransfer.files[0]) { state.baseHandle = null; C.loadBaseFile(e.dataTransfer.files[0]); }
-  });
+  // Score View shows the open Bitwig project (⟳ Read project); a DAWproject file is only loaded by the test suites,
+  // through the hidden #fileInput.
+  $('fileInput').addEventListener('change', e => { if (e.target.files[0]) C.loadBaseFile(e.target.files[0]); });
 
-  Object.assign(C, { flash, markSeg, setMode, lastW: 0 });
+  Object.assign(C, { flash, markSeg, setMode, applyView, lastW: 0 });
 })();

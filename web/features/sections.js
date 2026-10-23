@@ -185,10 +185,11 @@
     if (sig !== segSig) {
       segSig = sig;
       const btn = (v, t, title) => `<button data-section="${esc(v)}" title="${esc(title)}">${esc(t)}</button>`;
-      seg.innerHTML = btn('full', 'Full', 'All tracks') + gs.map(g => btn(g, g, g + ' + the selected clip\'s track')).join('') +
-        btn('pinned', 'Pinned', 'Pinned tracks + the selected clip\'s track (Tracks menu)');
+      seg.innerHTML = btn('full', 'Full', 'All instruments (as Instruments ▾ > All instruments)') + gs.map(g => btn(g, g, g + ' + the selected clip\'s track')).join('') +
+        btn('pinned', 'Pinned', 'Pinned tracks + the selected clip\'s track (pin them with 📌 or P)');
     }
-    const cur = gs.includes(prefs.section) || prefs.section === 'full' ? prefs.section : 'pinned';
+    // Full / Pinned are Score view's "All instruments / Pinned only" (state.scoreShow); a section filters further.
+    const cur = gs.includes(prefs.section) ? prefs.section : (SV.state.scoreShow === 'pinned' ? 'pinned' : 'full');
     seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.section === cur));
     bar.querySelectorAll('#svOrderSeg button').forEach(b => b.classList.toggle('on', b.dataset.order === prefs.order));
   }
@@ -201,6 +202,7 @@
   }
 
   function setSection(s) {
+    if (s === 'full' || s === 'pinned') { if (SV.core && SV.core.setScoreShow) SV.core.setScoreShow(s === 'full' ? 'all' : 'pinned'); s = 'pinned'; }
     prefs.section = s;
     store.set('section', s);
     update();
@@ -224,8 +226,8 @@
 
   // Visible tracks: a section shows its group plus the live clip's track.
   SV.hooks.visibleTracks.push((shown, all) => {
-    if (SV.state.mode !== 'score' || !SV.state.base || prefs.section === 'pinned') return undefined;
-    if (prefs.section === 'full') return new Set(all);
+    if (SV.state.mode !== 'score' || SV.state.view === 'clip' || !SV.state.base) return undefined; // Clip view: the pins decide
+    if (prefs.section === 'pinned' || prefs.section === 'full') return undefined; // no section: Score view's all / pinned choice
     if (!groups().includes(prefs.section)) return undefined;
     const names = new Set(all.filter(n => groupOf(n) === prefs.section));
     const cur = SV.currentTrack();
@@ -270,16 +272,30 @@
   SV.hooks.buildOptions.push((b, vrv, score) => {
     if (score.groupLabels) vrv.pageMarginLeft = (vrv.pageMarginLeft || 0) + 70;
   });
+  // Every system is measured before any label moves (a move between two measurements forces a layout per system).
+  // Systems in chunks the browser skips (off-screen, content-visibility) are turned when they come into view: measuring
+  // them now would force their layout (hundreds of getBBox calls on a full score).
+  const waiting = new WeakSet();
   function placeGroupLabels() {
-    document.querySelectorAll('#paper g.system').forEach(sys => {
+    const isGroup = g => !!g.querySelector('tspan.rend[font-style="italic"][font-weight="bold"]');
+    const core = SV.core || {};
+    const systems = [...document.querySelectorAll('#paper g.system')].map(sys => {
       const labels = [...sys.querySelectorAll(':scope > g.label')];
-      const isGroup = g => !!g.querySelector('tspan.rend[font-style="italic"][font-weight="bold"]');
-      const groupLabels = labels.filter(isGroup);
-      if (!groupLabels.length) return;
+      // (a label turned by an earlier run, on an engraving kept from an earlier render, is skipped)
+      const groupLabels = labels.filter(g => isGroup(g) && !g.querySelector('text').dataset.svRotated);
+      if (!groupLabels.length) return null;
+      if (core.skipped && core.skipped(sys)) {
+        if (!waiting.has(sys)) { waiting.add(sys); core.whenShown(sys, placeGroupLabels); }
+        return null;
+      }
       let left = Infinity;
       labels.filter(g => !isGroup(g)).forEach(g => { const bb = g.getBBox(); if (bb.width) left = Math.min(left, bb.x); });
+      return { groupLabels, left };
+    }).filter(Boolean);
+    systems.forEach(({ groupLabels, left }) => {
       groupLabels.forEach(g => {
         const t = g.querySelector('text');
+        t.dataset.svRotated = '1';
         const sizeEl = t.querySelector('tspan[font-size]');
         const fs = sizeEl ? parseFloat(sizeEl.getAttribute('font-size')) : 400;
         const x = (left === Infinity ? parseFloat(t.getAttribute('x')) : left) - fs * 0.6;

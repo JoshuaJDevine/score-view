@@ -3,7 +3,7 @@
 
 ## Purpose
 The user's Functional Color Theory, live in the score: key / function analysis, note colours, a Roman-numeral ribbon,
-overlays and aim assist (Alt+Shift+↑ on a live note). H toggles, Shift+H cycles views.
+overlays and aim assist (Ctrl+Shift+↑ on a live note). H toggles, Shift+H cycles views.
 
 ## Owns
 - Toolbar: **Colors ▾** `#hvBtn`, panel `#hvPanel` (legend `#hvLegendBtn`).

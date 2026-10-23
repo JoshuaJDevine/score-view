@@ -18,7 +18,17 @@ await withPage({ port, width: 1600, height: 1000 }, async ({ page, srv, errors }
   const dirs = await dirTexts(page);
   console.log('engraved:', artics, 'articulations,', slurs, 'slurs, text', dirs);
   assert(artics >= 30, 'spiccato dots');
-  assert(slurs >= 2, 'legato phrases slurred');
+  assert.equal(slurs, 0, 'no automatic slurs by default');
+  // Articulations ▾ > Slur legato passages
+  await page.click('#svaBtn');
+  await page.waitForSelector('#svaMenu input[data-set=slurLegato]');
+  await page.click('#svaMenu input[data-set=slurLegato]');
+  await page.click('#svaBtn');
+  await page.waitForFunction(() => document.querySelectorAll('#paper g.slur').length >= 2, { timeout: 5000 });
+  await page.click('#svaBtn');
+  await page.click('#svaMenu input[data-set=slurLegato]');
+  await page.click('#svaBtn');
+  await page.waitForFunction(() => !document.querySelector('#paper g.slur'), { timeout: 5000 });
   assert(dirs.includes('spicc.') && dirs.includes('pizz.'), 'technique text');
   assert(await count(page, '#paper g.dynam') >= 1, 'velocity dynamics in clip mode');
   await page.screenshot({ path: 'test/out-artic-e2e-clip.png' });
@@ -38,12 +48,15 @@ await withPage({ port, width: 1600, height: 1000 }, async ({ page, srv, errors }
   await page.click('#svaMenu input[data-set=onlySelected]');
   await page.click('#svaBtn');
 
-  // Palette: click a spiccato note at beat 32.5, choose Pizzicato.
+  // Palette: click a spiccato note at beat 32.5, Shift+K, choose Pizzicato.
   const clickNote = async id => {
     const box = await (await page.$('#' + id)).boundingBox();
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   };
   await clickNote('nL0_780_64');
+  await new Promise(r => setTimeout(r, 300));
+  assert(!(await page.$('#svaPalette')), 'a click selects without opening the palette');
+  await page.keyboard.down('Shift'); await page.keyboard.press('KeyK'); await page.keyboard.up('Shift');
   await page.waitForSelector('#svaPalette button', { timeout: 5000 });
   const buttons = await page.$$eval('#svaPalette button', els => els.map(b => b.textContent + (b.classList.contains('on') ? '*' : '')));
   console.log('palette:', buttons.join(' | '));
@@ -100,6 +113,16 @@ await withPage({ port, width: 1600, height: 1000 }, async ({ page, srv, errors }
   const dyn = await page.$$eval('#paper g.dynam', els => els.map(e => e.textContent.trim()));
   console.log('score mode dynamics:', dyn, 'hairpins', await count(page, '#paper g.hairpin'));
   await page.screenshot({ path: 'test/out-artic-e2e-score.png' });
+
+  // An articulation-map Note FX on the selected track: warning bar, one click switches it off (deviceOn).
+  srv.setData({ devices: { track: 'Violin 1', list: [{ index: 0, name: 'BBCSO String Articulations', on: true }, { index: 1, name: 'BBC Symphony Orchestra', on: true }] } });
+  await page.waitForSelector('#svaMapWarn:not(.hidden)', { timeout: 5000 });
+  assert.match(await page.$eval('#svaMapWarn', el => el.textContent), /BBCSO String Articulations.*Violin 1.*one note/s);
+  await page.screenshot({ path: 'test/out-artic-e2e-mapwarn.png' });
+  await page.click('#svaMapOff');
+  await page.waitForSelector('#svaMapWarn.hidden', { timeout: 5000 });
+  assert.ok(srv.edits.includes('deviceOn 0 0'), 'the map is switched off: ' + srv.edits.slice(-3).join(' | '));
+  console.log('ok   articulation map warning; Turn the map off sends deviceOn 0 0');
   assert.deepEqual(errors, []);
 });
 console.log('articulations e2e OK');

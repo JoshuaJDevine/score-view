@@ -114,6 +114,7 @@
   // Tint the staff lines of bars whose reading is not automatic.
   SV.addStyle('#paper g.staff.sv-reading > path { stroke: #c77d1a; }');
   SV.hooks.afterRender.push(render => {
+    document.querySelectorAll('#paper g.staff.sv-reading').forEach(el => el.classList.remove('sv-reading'));
     (render.staves || []).forEach(st => Object.keys(overridesFor(trackKey(st.part))).forEach(b => {
       const el = document.getElementById('m' + b + 's' + st.n);
       if (el) el.classList.add('sv-reading');

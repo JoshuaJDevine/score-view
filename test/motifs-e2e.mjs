@@ -11,7 +11,7 @@ const shots = [];
 
 await withPage({ port: PORT, width: 1300, height: 700 }, async ({ page, srv, errors }) => {
   const clip = () => srv.state.data.notes.map(q => [q.x, q.y, q.d]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  const synced = () => page.waitForFunction(v => SV.state.liveData && SV.state.liveData.v === v && SV.state.render, { timeout: 5000 }, srv.state.v);
+  const synced = () => page.waitForFunction(v => SV.state.liveData && SV.state.liveData.v >= v && SV.state.render, { timeout: 5000 }, srv.state.v);
   async function reset(notes) {
     srv.setNotes(notes.map(q => ({ ...q })));
     await synced(); await sleep(150);

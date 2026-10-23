@@ -23,8 +23,8 @@ const DEXED_CLAP = { format: 'clap', id: 'com.digital-suburban.dexed', name: 'De
 const FX = ['Strings', 'Basoon', 'Horns', 'Timpani'].map(x => ({ name: 'Articulation Map BBCSO ' + x, path: 'C:\\Lib\\Note FX Layer\\Articulation Map BBCSO ' + x + '.bwpreset', folder: 'Note FX Layer' }));
 const inv = { plugins: [BBC, K8, DEXED_CLAP], noteFx: FX, presets: [{ name: 'My Celeste', path: 'C:\\Lib\\My Celeste.bwpreset', folder: 'Instrument Layer' }] };
 
-const ESSENTIALS = T.TEMPLATES.filter(t => t.category === 'Essentials');
-const STARTERS = T.TEMPLATES.filter(t => t.category !== 'Essentials');
+const ESSENTIALS = T.TEMPLATES.filter(t => t.category === 'Orchestral & choral'); // the BBC SO / choir ensembles
+const STARTERS = T.TEMPLATES.filter(t => t.category !== 'Orchestral & choral');
 
 test('every template row has a notation instrument known to instruments.js', () => {
   const ids = new Set(I.all().map(x => x.id));
@@ -38,10 +38,13 @@ test('every template row has a notation instrument known to instruments.js', () 
   assert.equal(new Set(T.TEMPLATES.map(t => t.id)).size, T.TEMPLATES.length, 'unique ids');
 });
 
-test('24 starter templates: brief (tempo, meter, key, form, prompt), 3-10 rows, the requested ideas', () => {
-  assert.equal(STARTERS.length, 24);
-  ['sac-nes', 'sac-snes', 'sac-n64', 'lofi-study', 'cafe-piano'].forEach(id => assert.ok(T.templateById(id), id));
-  STARTERS.forEach(t => {
+test('10 templates ("fewer, better", 2026-10-18), each with a brief (tempo, meter, key, form, prompt); starters 3-10 rows', () => {
+  assert.deepEqual(T.TEMPLATES.map(t => t.id), ['classical', 'chamber-strings', 'film', 'string-quartet', 'satb-piano',
+    'sac-nes', 'sac-snes', 'sac-n64', 'hybrid-trailer', 'neo-classical']);
+  assert.deepEqual(T.CATEGORIES, ['Orchestral & choral', 'Retro & chiptune', 'Film & modern']);
+  ['lofi-study', 'cafe-piano', 'ujam-band'].forEach(id => assert.equal(T.templateById(id), null, id + ' retired'));
+  T.TEMPLATES.forEach(t => {
+    const starter = STARTERS.includes(t);
     const b = t.brief;
     assert.ok(t.name && t.note, t.id);
     assert.ok(b, t.id + ': brief');
@@ -51,13 +54,11 @@ test('24 starter templates: brief (tempo, meter, key, form, prompt), 3-10 rows, 
     assert.ok(b.form.length >= 3 && b.form.every(([n, bars]) => n && bars > 0), `${t.id}: form`);
     const sentences = b.prompt.split(/[.!?](\s|$)/).filter(s => s && s.trim().length > 3).length;
     assert.ok(b.prompt.length >= 200 && sentences >= 2 && sentences <= 6, `${t.id}: prompt (${sentences} sentences, ${b.prompt.length} chars)`);
-    assert.ok(t.rows.length >= 3 && t.rows.length <= 10, `${t.id}: ${t.rows.length} rows`);
+    if (starter) assert.ok(t.rows.length >= 3 && t.rows.length <= 10, `${t.id}: ${t.rows.length} rows`);
     assert.deepEqual(new Set(t.rows.map(r => r.name)).size, t.rows.length, `${t.id}: duplicate track names`);
     assert.deepEqual(T.checkRows(t.rows.map(r => ({ name: r.name, group: r.group }))), [], `${t.id}: split groups`);
-    t.rows.forEach(r => assert.equal(r.art, null, `${t.id}: articulation maps are for BBC SO rows only`));
+    if (starter) t.rows.forEach(r => assert.equal(r.art, null, `${t.id}: articulation maps are for BBC SO rows only`));
   });
-  const cats = new Set(STARTERS.map(t => t.category));
-  assert.ok(cats.size >= 6, 'several categories');
   assert.deepEqual(T.byCategory().map(g => g.category), T.CATEGORIES.filter(c => T.TEMPLATES.some(t => t.category === c)));
 });
 
@@ -73,7 +74,7 @@ test('every row has a patch hint (unless its plug-in is a single patch)', () => 
   assert.equal(T.patchFor({ patch: '' }, null), '');
 });
 
-test('real inventory: all 24 starters resolve to their first-choice plug-in, no warnings', () => {
+test('real inventory: all starters resolve to their first-choice plug-in, no warnings', () => {
   if (!INV.plugins.length) { console.log('    (skipped: empty inventory)'); return; }
   STARTERS.forEach(t => {
     T.resolveTemplate(t.id, INV, HARVEST).forEach((r, i) => {
@@ -111,7 +112,7 @@ test('harvested patch presets: loaded instead of the bare plug-in when plug-in +
   assert.equal(T.palette(inv, H)[0].vendor, 'Patch presets (harvested)');
 });
 
-test('real harvest: every BBC SO row of the Essentials quartet/classical templates loads a patch preset', () => {
+test('real harvest: every BBC SO row of the quartet / classical templates loads a patch preset', () => {
   if (!HARVEST.presets.length || !INV.plugins.length) { console.log('    (skipped: no harvest)'); return; }
   ['string-quartet', 'classical', 'chamber-strings'].forEach(id => T.resolveTemplate(id, INV, HARVEST).forEach(r =>
     assert.ok(r.presetLoaded, `${id}: ${r.name}`)));
@@ -129,13 +130,13 @@ test('starter brief helpers: markers from the form, brief line, starter sheet te
   assert.equal(sheet.tracks.length, 5);
   assert.deepEqual(sheet.tracks[2], { name: 'Triangle (bass)', group: 'NES APU', lib: 'Kontakt 8', patch: 'Super Audio Cart snapshot › Authentic › NES › "Triangle"' });
   const text = T.sheetText(sheet);
-  assert.match(text, /^NES 2A03 stage theme \(Retro & Chiptune\)\n150 BPM/);
+  assert.match(text, /^NES 2A03 stage theme \(Retro & chiptune\)\n150 BPM/);
   assert.match(text, /Form: Intro 4 · Stage A 8/);
   assert.match(text, /- Triangle \(bass\) — Kontakt 8: Super Audio Cart snapshot › Authentic › NES › "Triangle"/);
   assert.equal(T.starterSheet(null, rows).brief, null);
 });
 
-test('track names of the Essentials templates are recognised by name (or the wizard sets an override)', () => {
+test('track names of the orchestral & choral templates are recognised by name (or the wizard sets an override)', () => {
   let mismatches = [];
   ESSENTIALS.forEach(t => t.rows.forEach(r => {
     const got = I.lookup(r.name, r.group).id;

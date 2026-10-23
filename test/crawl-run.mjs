@@ -1,19 +1,24 @@
 // Runs the extension's arrangement crawler on the LIVE Bitwig project and compares the result with the
 // DAWproject fixture. Only runs on a project whose name contains "crawl" unless --any is given.
-//   node test/crawl-run.mjs [--any]
+//   node test/crawl-run.mjs [--any] [--exact] [--safe | --fast] [--analyze]
+// --safe / --fast read with the safe waits / the fast walk (adaptive waits + stepping past audio and effect lanes),
+// whatever the preferences say, and save to test/out-crawl-safe.json / test/out-crawl-fast.json (else test/out-crawl.json).
+// Compare two reads of one project: node test/crawl-compare.mjs test/out-crawl-safe.json test/out-crawl-fast.json
 import fs from 'fs';
 import { loadFixtureScore } from './lib.mjs';
 
 const BASE = 'http://localhost:8765';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const mode = process.argv.includes('--fast') ? 'fast' : process.argv.includes('--safe') ? 'safe' : '';
+const OUT = mode ? `test/out-crawl-${mode}.json` : 'test/out-crawl.json';
 let st;
 if (process.argv.includes('--analyze')) {
-  st = JSON.parse(fs.readFileSync('test/out-crawl.json', 'utf8')); // re-analyse the last crawl without touching Bitwig
+  st = JSON.parse(fs.readFileSync(OUT, 'utf8')); // re-analyse the last crawl without touching Bitwig
 } else {
   const t = await (await fetch(BASE + '/api/transport')).json();
   if (!process.argv.includes('--any') && !/crawl/i.test(t.project)) { console.error('Refusing: project is ' + t.project); process.exit(2); }
   const t0 = Date.now();
-  await fetch(BASE + '/api/edit', { method: 'POST', headers: { 'X-ScoreView': '1' }, body: process.argv.includes('--exact') ? 'crawl exact' : 'crawl' });
+  await fetch(BASE + '/api/edit', { method: 'POST', headers: { 'X-ScoreView': '1' }, body: ['crawl', process.argv.includes('--exact') ? 'exact' : '', mode].filter(Boolean).join(' ') });
   for (;;) {
     await sleep(300);
     st = await (await fetch(BASE + '/api/crawl')).json();
@@ -22,9 +27,9 @@ ${st.state}: ${st.message}            `);
     if (st.state !== 'running') break;
   }
   console.log(`
-${st.state} in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+${st.state} in ${((Date.now() - t0) / 1000).toFixed(1)} s` + (st.timing ? ` (timing ${st.timing}, ${st.skipped} lanes stepped past, lane order ${st.laneOrder}${st.rewalked ? ', walked again' : ''})` : ''));
   if (st.state !== 'done') process.exit(1);
-  fs.writeFileSync('test/out-crawl.json', JSON.stringify(st, null, 1));
+  fs.writeFileSync(OUT, JSON.stringify(st, null, 1));
 }
 
 // Per track: clips found, and how many export notes the crawl reproduces (pitch + start within 1/16 beat).

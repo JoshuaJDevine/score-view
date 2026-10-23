@@ -1,8 +1,8 @@
 // ⟳ Read arrangement in the page against the mock arrangement:
 //  * Score mode shows every track with notes after a read (preference "show all tracks", default), or keeps the
 //    Tracks choice ("keep my track selection");
-//  * the out-of-date dot: another track changed since the read / the track list changed; writes through
-//    SV.orchestrate.writeTracks and a new read keep it current;
+//  * the out-of-date dot: the track list changed; a clip changed while selected is taken into the read by the mirror,
+//    and writes through SV.orchestrate.writeTracks and a new read keep it current;
 //  * Inspire Melody in Clip mode takes the chords of the other staves from the read.
 //   PORT=8951 node test/arrangement-e2e.mjs        (SV_SHOTS=<dir> writes screenshots)
 import assert from 'assert';
@@ -43,8 +43,8 @@ try {
     if (sessionStorage.getItem('svInit')) return;
     sessionStorage.setItem('svInit', '1');
     localStorage.clear();
-    localStorage.setItem('scoreview.mode', '"score"');
-    localStorage.setItem('scoreview.trackMode2', '"pinned"');
+    localStorage.setItem('scoreview.view', '"score"');
+    localStorage.setItem('scoreview.scoreShow', '"pinned"');
   });
   await page.goto(srv.url, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.SV && SV.arrangement && SV.state.liveData && document.querySelector('#paper svg'), { timeout: 30000 });
@@ -59,19 +59,29 @@ try {
   const stale = () => page.evaluate(() => ({ dot: !document.querySelector('#svarStale').hidden, title: document.querySelector('#svarStale').title,
     info: document.querySelector('#svlReadInfo').textContent, reasons: SV.arrangement.staleReasons() }));
 
-  // 1. Before the read: pinned mode with no pins shows only the selected clip's track
+  // 1. Score view, "Pinned only" with no pins: only the selected clip's track. A Read keeps that choice;
+  //    "All instruments" (Instruments ▾) shows every track with notes.
   assert.deepEqual(await shownParts(), ['Pigments']);
   await read();
-  assert.deepEqual(await shownParts(), ['Pigments', 'Pocket Strings'], 'every track with notes after the read');
+  assert.deepEqual(await shownParts(), ['Pigments'], 'a Read keeps the view');
+  await page.evaluate(() => SV.core.setScoreShow('all'));
+  await page.waitForFunction(() => SV.state.render.score.parts.length === 2, { timeout: 5000 });
+  assert.deepEqual(await shownParts(), ['Pigments', 'Pocket Strings'], 'all instruments');
   assert.equal(await page.evaluate(() => SV.state.trackMode), 'all');
-  assert.match(await page.$eval('#trackBtn', el => el.textContent), /Tracks: all/);
-  assert.equal(await page.$eval('#svarShowAll', el => el.checked), true, 'preference defaults to show all');
   if (SHOTS) {
     fs.mkdirSync(SHOTS, { recursive: true });
-    await page.click('#trackBtn');
-    await page.screenshot({ path: SHOTS + '/pre-read-all-tracks.png' });
-    await page.click('#paper');
+    await page.screenshot({ path: SHOTS + '/read-all-instruments.png' });
   }
+  // Clip bars: the selected Pigments clip (bars 1–4) widened to the overlapping Pocket Strings clip (bars 1–8).
+  await page.evaluate(() => { SV.state.range = 'clip'; SV.render(); });
+  assert.equal(await page.evaluate(() => SV.state.render.measures), 8, 'Clip bars cover the overlapping clips on the shown staves');
+  await page.evaluate(() => { SV.state.range = 'all'; SV.render(); });
+  // A pinned track gets a pin beside its staff name.
+  await page.evaluate(() => { SV.state.pinned.add('Pocket Strings'); SV.render(); });
+  await page.waitForFunction(() => document.querySelectorAll('#paper .svpb-pin').length >= 1, { timeout: 5000 });
+  await page.evaluate(() => { SV.state.pinned.delete('Pocket Strings'); SV.render(); });
+  assert.equal(await page.evaluate(() => document.querySelectorAll('#paper .svpb-pin').length), 0, 'unpinned: no pin');
+
   let s = await stale();
   assert.equal(s.dot, false, 'fresh read is current');
   assert.match(s.info, /✓ 2 parts read/);
@@ -82,16 +92,17 @@ try {
   await sleep(1800);
   assert.deepEqual((await stale()).reasons, [], 'writeTracks keeps the read current');
 
-  // 3. Pigments changed in Bitwig while selected (not stale: it is shown live), then another clip is selected: stale
+  // 3. Pigments changed in Bitwig while selected: once settled, the mirror (features/arrangement.js harvest) takes
+  //    the clip into the read, so selecting another clip leaves the read current. ("<track> changed" for a clip the
+  //    mirror could not place is covered by test/arrangement-stale-test.mjs and test/arrangement-mirror-e2e.mjs.)
   srv.setNotes([...srv.state.data.notes.map(n => ({ ...n })), { ch: 0, x: 48, y: 76, d: 1, vel: 100, sel: false }]);
-  await sleep(400);
-  assert.equal((await stale()).dot, false, 'the selected clip is overlaid live');
+  await page.waitForFunction(() => SV.state.crawl.result.some(c => c.track === 'Pigments' && c.notes.some(n => n[2] === 76)), { timeout: 5000 });
+  assert.equal((await stale()).dot, false, 'the selected clip is harvested into the read');
   await post('gotoStay 0 0 ' + encodeURIComponent('Pocket Strings'));
-  await page.waitForFunction(() => !document.querySelector('#svarStale').hidden, { timeout: 5000 });
+  await page.waitForFunction(() => SV.state.liveData.track === 'Pocket Strings' && SV.state.liveData.settled !== false, { timeout: 5000 });
+  await sleep(300);
   s = await stale();
-  assert.deepEqual(s.reasons, ['Pigments changed']);
-  assert.match(s.title, /Pigments changed/);
-  assert.match(s.info, /out of date/);
+  assert.deepEqual(s.reasons, [], 'the harvested clip matches: the read stays current');
   if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await page.screenshot({ path: SHOTS + '/pre-read-stale.png', clip: { x: 0, y: 0, width: 1500, height: 260 } }); }
 
   // 4. A new read is current again; a new track makes it stale
@@ -126,15 +137,44 @@ try {
   for (const n of downbeats) assert.ok(bflat.includes(n.y % 12), `downbeat ${n.y} fits B♭ major (clip bar ${n.x / BAR + 1} = arranger bar ${n.x / BAR + 5})`);
   await page.click('#insClose');
 
-  // 6. Preference "keep my track selection"
-  await page.click(SEL.mode('score'));
-  await page.click('#trackBtn');
-  await page.click('#svarShowAll');
-  await page.click('input[name=trackMode][value=pinned]');
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('scoreview.arrangement.afterRead'))), 'keep');
+  // 6. Clip view with a pinned track: the selected clip plus the pinned track; a Read stays in Clip view.
+  await page.click(SEL.mode('clip'));
+  await page.evaluate(() => SV.core.setPinned('Pocket Strings', true));
   await read();
-  assert.equal(await page.evaluate(() => SV.state.trackMode), 'pinned', 'track selection kept');
-  assert.deepEqual(await shownParts(), ['Flute'], 'only the selected clip\'s track (no pins)');
+  assert.equal(await page.evaluate(() => SV.state.view + '/' + SV.state.mode + '/' + SV.state.range), 'clip/score/clip', 'still Clip view');
+  assert.deepEqual(await shownParts(), ['Flute', 'Pocket Strings'], 'the selected clip\'s track + the pinned one');
+  assert.match(await page.$eval('#pinBtn', el => el.textContent), /Pin$/, 'Flute itself is not pinned');
+  await page.evaluate(() => SV.core.setPinned('Flute', true));
+  assert.ok(await page.$eval('#pinBtn', el => el.classList.contains('on') && /Pinned/.test(el.textContent)), 'the Pin toggle lights up');
+
+  // 7. A read that cannot start (Bitwig's focus is on notes in the clip editor): a prompt says what to do; selecting
+  //    another clip in Bitwig tries again by itself. Try again / Close work too.
+  const failShown = () => page.evaluate(() => !document.querySelector('#svarFail').hidden);
+  srv.failCrawl('Bitwig is stepping through the notes inside the clip, not through clips.', 'clickClip');
+  const before = await page.evaluate(() => SV.state.baseMtime);
+  await page.click('#svarRead');
+  await page.waitForFunction(() => !document.querySelector('#svarFail').hidden, { timeout: 10000 });
+  assert.match(await page.$eval('#svarFail', el => el.textContent), /could not be read.*stepping through the notes.*click any clip in the Arranger/is);
+  assert.equal(await page.evaluate(() => SV.state.baseMtime), before, 'no new read installed');
+  srv.selectClip(0); // the user clicks the Pocket Strings clip in Bitwig
+  await page.waitForFunction(t0 => SV.state.baseMtime > t0 && !document.querySelector('#svarRead').disabled, { timeout: 15000 }, before);
+  assert.equal(await failShown(), false, 'the retry closed the prompt');
+  srv.failCrawl('Bitwig action not found: Select Next');
+  await page.click('#svarRead');
+  await page.waitForFunction(() => !document.querySelector('#svarFail').hidden, { timeout: 10000 });
+  await page.click('#svarRetry');
+  await page.waitForFunction(() => document.querySelector('#svarFail').hidden && !document.querySelector('#svarRead').disabled, { timeout: 15000 });
+  srv.failCrawl('Bitwig action not found: Select Next');
+  await page.click('#svarRead');
+  await page.waitForFunction(() => !document.querySelector('#svarFail').hidden, { timeout: 10000 });
+  await page.click('#svarFailClose');
+  assert.equal(await failShown(), false, 'Close');
+  // fix 'stop': the mock is not playing, so the prompt tries again by itself (the 500 ms tick) and the read lands
+  const beforeStop = await page.evaluate(() => SV.state.baseMtime);
+  srv.failCrawl('Stop playback first.', 'stop');
+  await page.click('#svarRead');
+  await page.waitForFunction(t0 => SV.state.baseMtime > t0 && document.querySelector('#svarFail').hidden &&
+    !document.querySelector('#svarRead').disabled, { timeout: 15000 }, beforeStop);
   assert.deepEqual(errors, []);
   console.log('arrangement-e2e OK');
 } finally {

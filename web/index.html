@@ -9,8 +9,11 @@
 <body>
 <header>
   <div class="group seg" id="modeSeg">
-    <button data-mode="clip" class="on" title="Just the selected clip">Clip</button>
-    <button data-mode="score" title="Selected tracks from the DAWproject export, with the selected clip live">Score</button>
+    <button data-mode="clip" class="on" title="The selected clip's bars: its track, plus the pinned tracks">Clip</button>
+    <button data-mode="score" title="The whole song (bar 1 to the end of the last clip): all instruments, or only the pinned ones (Instruments ▾)">Score</button>
+  </div>
+  <div class="group">
+    <button class="btn pin-toggle" id="pinBtn" title="Pin the selected clip's track: it stays in Clip view next to whatever clip you select (P)">📌 Pin</button>
   </div>
   <div class="group">
     <div class="seg" id="srcSeg">
@@ -20,23 +23,8 @@
   </div>
   <div class="group scoreOnly hidden">
     <button class="btn" id="freshBtn" title="Start an empty score from this project's instrument tracks (drops the previous score)">New empty score</button>
-    <button class="btn" id="openBtn" title="Pick your DAWproject export; it reloads automatically when you re-export">Open .dawproject…</button>
-    <button class="btn hidden" id="reconnectBtn"></button>
+    <!-- no visible control: the test suites load DAWproject fixtures through it (core/ui.js) -->
     <input type="file" id="fileInput" accept=".dawproject,.xml" class="hidden">
-    <div class="dropdown">
-      <button class="btn" id="trackBtn">Tracks ▾</button>
-      <button class="btn" id="pinBtn" title="Keep this track in the score (P)">Pin</button>
-      <div id="trackPanel" class="hidden">
-        <label><input type="radio" name="trackMode" value="pinned"> Pinned tracks + selected clip's track</label>
-        <label><input type="radio" name="trackMode" value="all"> All tracks</label>
-        <div class="hint">Tick tracks to pin them, click a group name to pin the whole group, or press <b>P</b> to pin the selected clip's track. <a id="clearPins">Clear pins</a></div>
-        <div id="trackList"></div>
-      </div>
-    </div>
-    <div class="seg" id="rangeSeg">
-      <button data-range="clip" title="Only the bars under the selected clip">Clip bars</button>
-      <button data-range="all">Whole song</button>
-    </div>
   </div>
   <div class="group">
     <label for="keySel">Key</label>
@@ -63,10 +51,14 @@
   </div>
   <div class="group">
     <label title="Show short detached notes with longer values (display only)"><input type="checkbox" id="simplify" checked> Simplify rhythms</label>
+    <label title="Read the performance as written intent: starts and ends snap to the plainest value that fits (beat, then 8th) before the Quantize grid, so a note played early or held a little short reads as meant (display, print and MusicXML only; off = as played)"><input type="checkbox" id="interpret" checked> Score rhythms</label>
     <label><input type="checkbox" id="follow" checked> Follow</label>
-    <label><input type="checkbox" id="condense" checked> Hide empty staves</label>
+    <label title="Per system: a staff with nothing to play on a system is left out there (the first system shows all)"><input type="checkbox" id="condense" checked> Hide empty staves</label>
+    <label title="Score mode: instruments with no notes in the shown bars are left out (the track you are editing and pinned tracks always show)"><input type="checkbox" id="hideUnused" checked> Hide unused instruments</label>
     <label title="Hide notes below C1 (articulation keyswitches)"><input type="checkbox" id="hideKs" checked> Hide keyswitches</label>
     <label><input type="checkbox" id="audition" checked> Audition</label>
+    <label title="Arrow-key layout (the ? sheet lists the keys)">Keys <select id="keyPreset"><option value="scoreview">Score View</option><option value="sibelius">Sibelius</option><option value="dorico">Dorico</option><option value="classic">Classic (arrows move notes)</option></select></label>
+    <label title="Also select clicked notes in Bitwig's clip editor. Off by default: Bitwig then steps through notes instead of clips, so Read project fails until you click a clip in the Arranger."><input type="checkbox" id="bitwigSel"> Select in Bitwig too</label>
   </div>
   <div id="status"><span id="renderTime"></span><span id="title">—</span><span id="dot" title="Bitwig connection"></span></div>
 </header>
@@ -78,15 +70,14 @@
   <span id="svSelInfo">Nothing selected</span>
   <span id="svEntryInfo" hidden></span>
   <span class="svs-spacer"></span>
+  <button id="allStaves" class="svs-btn" title="Show every staff (overrides Hide empty staves / Hide unused instruments until clicked again)">All staves</button>
   <span id="svStatusTools"></span>
   <span id="svStatusRight"></span>
 </div>
 <footer id="help"><button id="helpToggle" title="Show all keyboard shortcuts">Shortcuts ▾</button>
-  Click a note (<kbd>Shift</kbd>+click to add) · <kbd>↑</kbd><kbd>↓</kbd> semitone · <kbd>Alt</kbd>+<kbd>↑</kbd><kbd>↓</kbd> scale step ·
-  <kbd>Shift</kbd>+<kbd>↑</kbd><kbd>↓</kbd> octave · <kbd>←</kbd><kbd>→</kbd> move · <kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd> length ·
+  Click a note (<kbd>Shift</kbd>+click to add) · <span id="helpKeys"></span> ·
   <kbd>Del</kbd> delete · <kbd>Tab</kbd> next note · <kbd>Ctrl</kbd>+<kbd>Z</kbd>/<kbd>Y</kbd> undo/redo in Bitwig
 </footer>
-<div id="drop">Drop a .dawproject file</div>
 <div id="flash" class="hidden"></div>
 <!-- Page core: web/core/*.js, classic scripts in this order (see core/base.js). guard.js comes first: it adds the
      X-ScoreView header to every /api request. The feature modules follow; their order is the hook order. -->
@@ -99,6 +90,9 @@
 <script src="core/base.js"></script>
 <script src="core/shortcuts.js"></script>
 <script src="core/sources.js"></script>
+<script src="core/svg-inline.js"></script>
+<script src="core/chunks.js"></script>
+<script src="core/engrave.js"></script>
 <script src="core/render.js"></script>
 <script src="core/net.js"></script>
 <script src="core/project.js"></script>
@@ -126,6 +120,8 @@
 <script src="features/passage.js"></script>
 <script src="features/playback.js"></script>
 <script src="features/musicxml.js"></script>
+<script src="features/arrangement-mirror.js"></script>
+<script src="features/arrangement-listen.js"></script>
 <script src="features/arrangement.js"></script>
 <script src="features/import.js"></script>
 <script src="features/print.js"></script>

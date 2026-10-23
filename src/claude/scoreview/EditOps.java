@@ -70,9 +70,10 @@ final class EditOps
       op("loopOff", 0, 0, X, ""),
       op("solo", 2, 2, X, "trackIndex 0|1"),
       op("mute", 2, 2, X, "trackIndex 0|1"),
+      op("deviceOn", 2, 2, X, "deviceIndex(selected track) 0|1"),
       op("metronome", 1, 1, X, "0|1"),
       // arrangement crawl (ArrangementCrawler)
-      op("crawl", 0, 1, Handler.CRAWLER, "[exact]"),
+      op("crawl", 0, MANY, Handler.CRAWLER, "[exact] [safe|fast] [tracks trackName(URL-encoded)...]"),
       op("crawlCancel", 0, 0, Handler.CRAWLER, ""),
       // clip navigation (ClipNavigator)
       op("goto", 3, MANY, Handler.NAVIGATOR, "lane startBeats trackName(URL-encoded)"),
@@ -91,6 +92,7 @@ final class EditOps
       dev("act", 1, MANY, "actionId"),
       dev("clipNext", 0, 0, ""),
       dev("clipPrev", 0, 0, ""),
+      dev("clipStepProbe", 0, 1, "[n (1-8)]"),
       dev("selectTrack", 1, 1, "trackIndex"),
       dev("moveTrackAfter", 2, 2, "srcIndex dstIndex"),
       dev("moveTrackBefore", 2, 2, "srcIndex dstIndex"));

@@ -13,7 +13,8 @@ choice is remembered per track.
 - localStorage `scoreview.instruments.*` (`overrides`, `ranges`, …).
 
 ## Hooks
-`transformScore`, `afterRender`. Reads `SV.wizard` when present.
+`transformScore`, `afterRender` (click listeners on the staff names, once per label: `.svi-bound`). Reads `SV.wizard`
+when present.
 
 ## Tests
 `test/instruments-test.mjs` (lookup, clefs), `test/instruments-e2e.mjs` (label, picker, override, toggles; uses

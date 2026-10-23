@@ -441,6 +441,7 @@
           const s = (attr(k, 'startid') || '').replace(/^#/, ''), e = (attr(k, 'endid') || '').replace(/^#/, '');
           if (s && e) { const no = (slurNo++ % 6) + 1; addSlur(s, { type: 'start', no }); addSlur(e, { type: 'stop', no }); }
         } else if (/^(reh|dir|tempo|dynam)$/.test(nm)) {
+          if (nm === 'dir' && /^\s*⚠/.test(k.textContent || '')) return; // Score View's own warnings (e.g. "⚠ ks"), not music
           m.dirs.push(k);
           // "accel. - - -": dashes from the text to @tstamp2.
           if (nm === 'dir' && attr(k, 'extender') === 'true' && attr(k, 'tstamp2')) spans.push({ m, el: k, kind: 'dashes' });

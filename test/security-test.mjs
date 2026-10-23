@@ -81,6 +81,16 @@ async function matrix(label, port) {
     assert.equal((await request(srv.port, { method: 'POST', path: '/api/marks', headers: { 'X-ScoreView': '1', Origin: own }, body })).status, 200);
     assert.equal((await request(srv.port, { path: '/api/marks' })).body, body);
     ok('mock: /api/marks POST needs the header and our Origin');
+    // the stored arrangement read (/api/arrangement): same rules, and only for the open project
+    const doc = '{"v":1,"project":"Mock"}', at = '/api/arrangement?project=Mock';
+    assert.equal((await request(srv.port, { method: 'POST', path: at, headers: { Origin: own, 'Content-Type': 'text/plain' }, body: doc })).status, 403);
+    assert.equal((await request(srv.port, { method: 'POST', path: at, headers: { 'X-ScoreView': '1', Origin: 'https://evil.example' }, body: doc })).status, 403);
+    assert.equal(srv.mirrorPosts.length, 0, 'refused reads never stored');
+    assert.equal((await request(srv.port, { method: 'POST', path: '/api/arrangement?project=Other', headers: { 'X-ScoreView': '1', Origin: own }, body: doc })).status, 409);
+    assert.equal((await request(srv.port, { method: 'POST', path: at, headers: { 'X-ScoreView': '1', Origin: own }, body: 'not json' })).status, 400);
+    assert.equal((await request(srv.port, { method: 'POST', path: at, headers: { 'X-ScoreView': '1', Origin: own }, body: doc })).status, 200);
+    assert.deepEqual(JSON.parse((await request(srv.port, { path: '/api/arrangement' })).body).doc, JSON.parse(doc));
+    ok('mock: /api/arrangement POST needs the header, our Origin and the open project');
   } finally { await srv.close(); }
 }
 

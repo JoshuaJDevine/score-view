@@ -24,7 +24,10 @@ await withPage({ port: Number(process.env.PORT || 8840), height: 1000 }, async (
   assert.equal(r[0].lib, 'BBC Symphony Orchestra — Violins 1'); // harvested patch preset
   assert.match(await page.$eval('#svwRows tr[data-i="0"]', el => el.textContent), /✓ patch preset/);
   assert.match(await page.$eval('.svw-help', el => el.textContent), /node tools\/harvest-presets\.mjs <file>/);
-  assert.equal(r[0].art, 'Articulation Map BBCSO Strings');
+  assert.equal(r[0].art, null, 'default: keyswitch notes in the clip, no articulation map');
+  await page.select('#svwArt', 'map');
+  r = await rows();
+  assert.equal(r[0].art, 'Articulation Map BBCSO Strings', 'BBC SO articulations: Articulation map');
 
   // rename, group, reorder, add, remove
   const nameInput = i => `#svwRows tr[data-i="${i}"] input.nm`;
@@ -72,7 +75,8 @@ await withPage({ port: Number(process.env.PORT || 8840), height: 1000 }, async (
   await act('create');
   await act('create'); // "Yes, add 4 tracks"
   await page.waitForFunction(() => !document.querySelector('.svw-sum').hidden, { timeout: 10000 });
-  const plan = srv.wizard.plans[0].trim().split('\n');
+  // every template has a brief now: its tempo / meter / marker lines (starter settings) come before the group and tracks
+  const plan = srv.wizard.plans[0].trim().split('\n').filter(l => !/^(option\t(tempo|meter)=|marker\t)/.test(l));
   assert.equal(plan[0], 'option\tpos=-1');
   assert.equal(plan[1].split('\t')[0], 'group');
   assert.match(plan[2], /^track\tname=Violin I\tgroup=Quartet\tcolor=#[0-9a-f]{6}\tdev=file:.*Articulation Map BBCSO Strings\.bwpreset\|Articulation Map BBCSO Strings\tdev=file:[^\t]*Violins 1\.vstpreset\|BBC Symphony Orchestra — Violins 1$/);
@@ -86,6 +90,17 @@ await withPage({ port: Number(process.env.PORT || 8840), height: 1000 }, async (
   await page.screenshot({ path: 'test/out-wizard-summary.png' });
   // created tracks show up in the live track list
   await page.waitForFunction(() => ['Quartet', 'Violin I', 'Synth'].every(n => SV.state.liveData.tracks.some(t => t.name === n)), { timeout: 5000 });
+  // New counts as loaded: the project is stored like a read with no clips, every new track an empty staff (not the
+  // group), and Score view shows them all
+  await page.waitForFunction(() => SV.state.crawl && SV.state.crawl.fresh && SV.state.base.fresh &&
+    ['Violin I', 'Cello', 'Viola', 'Synth'].every(n => SV.state.base.parts.some(p => p.name === n)), { timeout: 5000 });
+  assert.equal(await page.evaluate(() => SV.state.base.parts.some(p => p.name === 'Quartet')), false, 'a group is not a staff');
+  assert.equal(await page.evaluate(() => SV.state.view + '/' + SV.state.scoreShow), 'score/all');
+  await page.waitForFunction(() => /✓ new score · \d+ staves/.test(document.querySelector('#svlReadInfo').textContent), { timeout: 5000 });
+  for (let i = 0; i < 60 && !srv.mirror.get(srv.state.project); i++) await sleep(50);
+  const stored = JSON.parse(srv.mirror.get(srv.state.project) || 'null');
+  assert.ok(stored && stored.crawl.fresh, 'the new score is stored for the project');
+  assert.ok(stored.crawl.tracks.some(t => t.name === 'Violin I'), 'with its tracks');
   // the notation instrument is remembered when the name alone would not find it
   assert.equal(await page.evaluate(() => SV.instruments.lookup('Synth', 'Quartet').id === 'synth' || !!SV.instruments.settings.overrides['Synth']), true);
   await act('cancel'); // Close
@@ -102,16 +117,16 @@ await withPage({ port: Number(process.env.PORT || 8840), height: 1000 }, async (
   await clickIn(page, '#svwOpen');
   await page.waitForSelector('.svw-dlg');
   const optgroups = await page.$$eval('#svwTpl optgroup', els => els.map(e => e.label));
-  assert.deepEqual(optgroups.slice(0, 2), ['Essentials', 'Retro & Chiptune']);
-  assert.equal(await page.$$eval('#svwTpl option', els => els.length), 29);
+  assert.deepEqual(optgroups.slice(0, 2), ['Orchestral & choral', 'Retro & chiptune']);
+  assert.equal(await page.$$eval('#svwTpl option', els => els.length), 10);
   assert.equal(await page.$('#svwTpl option[value="big-band"]'), null);
   await act('browse');
   assert.ok(await visible('.svw-pick'));
   const cats = await page.$$eval('.svw-cat', els => els.map(e => e.textContent));
-  assert.equal(cats[0], 'All29');
-  assert.ok(cats.includes('Retro & Chiptune4') && cats.includes('Lo-fi & Chill3'), cats.join(','));
-  await page.click('.svw-cat[data-cat="Retro & Chiptune"]');
-  assert.equal(await page.$$eval('.svw-card', els => els.length), 4);
+  assert.equal(cats[0], 'All10');
+  assert.deepEqual(cats.slice(1), ['Orchestral & choral5', 'Retro & chiptune3', 'Film & modern2']);
+  await page.click('.svw-cat[data-cat="Retro & chiptune"]');
+  assert.equal(await page.$$eval('.svw-card', els => els.length), 3);
   await page.click('.svw-card[data-id="sac-nes"]');
   const preview = await page.$eval('#svwPreview', el => el.textContent);
   assert.match(preview, /NES 2A03 stage theme/);
@@ -152,7 +167,8 @@ await withPage({ port: Number(process.env.PORT || 8840), height: 1000 }, async (
     'marker\tname=Stage A\tbar=5', 'marker\tname=Stage B\tbar=13', 'marker\tname=Bridge\tbar=21', 'marker\tname=Turnaround\tbar=25']);
   assert.equal(srv.state.play.tempo, 150);
   assert.deepEqual(srv.state.data.markers.map(m => `${m.name}@${m.beat}`),
-    ['Intro@0', 'Stage A@16', 'A@32', 'Stage B@48', 'B@64', 'Bridge@80', 'Turnaround@96']);
+    // with the markers the string quartet's brief set in the first run (3/4: Minuet B at bar 9 = beat 24, …)
+    ['Intro@0', 'Stage A@16', 'Minuet B@24', 'A@32', 'Stage B@48', 'B@64', 'Trio@72', 'Bridge@80', 'Turnaround@96', 'Minuet da capo@120']);
   const sum3 = await page.$eval('.svw-sum', el => el.textContent);
   assert.match(sum3, /5 of 5 tracks created/);
   assert.match(sum3, /✓ Tempo 150 BPM/);
@@ -170,7 +186,7 @@ await withPage({ port: Number(process.env.PORT || 8840), height: 1000 }, async (
   await page.waitForSelector('.svw-sheet');
   const sheetText = await page.$eval('.svw-sheet', el => el.textContent);
   assert.match(sheetText, /NES 2A03 stage theme/);
-  assert.match(sheetText, /Retro & Chiptune/);
+  assert.match(sheetText, /Retro & chiptune/);
   assert.match(sheetText, /150 BPM · 4\/4 · E minor/);
   assert.match(sheetText, /Write under the real 2A03 limits/);
   assert.match(sheetText, /Pulse 1 \(lead\)Kontakt 8 — Super Audio CartSuper Audio Cart snapshot/);
@@ -182,14 +198,14 @@ await withPage({ port: Number(process.env.PORT || 8840), height: 1000 }, async (
   // ---- options off: no tempo line when unchecked; markers are skipped while Bitwig plays
   srv.wizard.playing = true;
   await clickIn(page, '#svwOpen');
-  await loadTemplate('lofi-study');
+  await loadTemplate('sac-nes');
   await act('create');
   await page.click('#svwOptTempo'); // off
   await act('create');
   await page.waitForFunction(() => !document.querySelector('.svw-sum').hidden, { timeout: 10000 });
   const plan3 = srv.wizard.plans[2];
   assert.ok(!/option\ttempo|option\tmeter/.test(plan3), 'tempo unchecked');
-  assert.match(plan3, /marker\tname=Loop A\tbar=5/);
+  assert.match(plan3, /marker\tname=Stage A\tbar=5/);
   assert.match(await page.$eval('.svw-sum', el => el.textContent), /✗ Marker "Intro" at bar 1: skipped, stop playback in Bitwig first/);
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('scoreview.wizard.optTempo'))), false);
   await act('cancel');
@@ -233,6 +249,33 @@ await withPage({ port: Number(process.env.PORT || 8840), height: 1000 }, async (
   await act('cancel');
   srv.wizard.stepMs = 15;
 
+  // ---- Bitwig not in front: Group cannot act, the job waits and the dialog asks for a click into Bitwig; once Bitwig
+  //      has the focus the group is made. A second run: Skip grouping leaves the tracks ungrouped.
+  const focusRun = async () => {
+    await clickIn(page, '#svwOpen');
+    await loadTemplate('chamber-strings');
+    await act('create');
+    assert.match(await page.$eval('.svw-confirm', el => el.textContent), /click into Bitwig’s window/);
+    await act('create');
+    await page.waitForFunction(() => !document.querySelector('#svwFocus').hidden, { timeout: 10000 });
+    assert.match(await page.$eval('#svwFocus', el => el.textContent), /Click Bitwig's window.*“Strings”/);
+  };
+  srv.wizard.focus = false;
+  await focusRun();
+  srv.wizard.focus = true; // the user clicked Bitwig's title bar
+  await page.waitForFunction(() => !document.querySelector('.svw-sum').hidden, { timeout: 10000 });
+  assert.equal(await page.$eval('#svwFocus', el => el.hidden), true);
+  assert.match(await page.$eval('.svw-sum', el => el.textContent), /5 of 5 tracks created/);
+  assert.deepEqual(srv.wizard.groups.map(g => g.ok), [true]);
+  await act('cancel');
+  srv.wizard.focus = false;
+  await focusRun();
+  await page.click('[data-act="skipGroups"]');
+  await page.waitForFunction(() => !document.querySelector('.svw-sum').hidden, { timeout: 10000 });
+  assert.match(await page.$eval('.svw-sum', el => el.textContent), /Grouping skipped; tracks left ungrouped \(select them in Bitwig and press Ctrl\+G\)/);
+  await act('cancel');
+  srv.wizard.focus = true;
+
   // ---- Swap library from the staff picker (clip mode: the live "Violin 1" staff). Creating tracks switched
   // Score View to a fresh score of the new ensemble, so go back to Clip mode first.
   await page.click('#modeSeg [data-mode=clip]');
@@ -251,6 +294,12 @@ await withPage({ port: Number(process.env.PORT || 8840), height: 1000 }, async (
   assert.deepEqual(srv.wizard.swaps[0], { track: 'Violin 1', index: 2, mode: 'disable',
     lib: { kind: 'vst3', id: '5653544E694B386B6F6E74616B742038', label: 'Kontakt 8' } });
   await page.waitForFunction(() => /Violin 1: Kontakt 8 loaded \(old instrument disabled\)/.test(document.querySelector('#flash').textContent), { timeout: 5000 });
+
+  // ---- F5: the project made with New comes back as it was stored (no Read), its tracks still staves
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => window.SV && SV.state.base && SV.state.base.fresh && SV.state.crawl && SV.state.crawl.fresh &&
+    SV.state.base.parts.some(p => p.name === 'Violin I'), { timeout: 15000 });
+  assert.match(await page.$eval('#svarStatus', el => el.textContent), /Restored/);
 
   assert.deepEqual(errors, []);
 });

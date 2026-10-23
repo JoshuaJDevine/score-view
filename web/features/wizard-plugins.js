@@ -4,7 +4,7 @@
 (function (root) {
   const data = {
     "generated": "2026-10-16",
-    "library": "C:\\Users\\you\\Documents\\Bitwig Studio\\Library",
+    "library": "C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library",
     "plugins": [
       {"format":"vst3","id":"56535441676C74616D706C6520677569","name":"Ample Guitar L","vendor":"Ample Sound","category":"Synth"},
       {"format":"vst3","id":"41727475415649535433303350726F63","name":"Acid V","vendor":"Arturia","category":"Synth"},
@@ -179,33 +179,33 @@
       {"format":"vst3","id":"56534558667350736572756D20320000","name":"Serum 2","vendor":"Xfer Records","category":"Synth"}
     ],
     "noteFx": [
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Basoon.bwpreset","name":"Articulation Map BBCSO Basoon","folder":"Note FX Layer"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Bass Trombones.bwpreset","name":"Articulation Map BBCSO Bass Trombones","folder":"Note FX Layer"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Celeste.bwpreset","name":"Articulation Map BBCSO Celeste","folder":"Note FX Layer"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Clarinet.bwpreset","name":"Articulation Map BBCSO Clarinet","folder":"Note FX Layer"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Crotales.bwpreset","name":"Articulation Map BBCSO Crotales","folder":"Note FX Layer"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Flute.bwpreset","name":"Articulation Map BBCSO Flute","folder":"Note FX Layer"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Glockenspiel.bwpreset","name":"Articulation Map BBCSO Glockenspiel","folder":"Note FX Layer"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Harp.bwpreset","name":"Articulation Map BBCSO Harp","folder":"Note FX Layer"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Horns.bwpreset","name":"Articulation Map BBCSO Horns","folder":"Note FX Layer"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Marimba.bwpreset","name":"Articulation Map BBCSO Marimba","folder":"Note FX Layer"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Oboe.bwpreset","name":"Articulation Map BBCSO Oboe","folder":"Note FX Layer"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Piccolo.bwpreset","name":"Articulation Map BBCSO Piccolo","folder":"Note FX Layer"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Strings.bwpreset","name":"Articulation Map BBCSO Strings","folder":"Note FX Layer"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Tenor Trombones.bwpreset","name":"Articulation Map BBCSO Tenor Trombones","folder":"Note FX Layer"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Timpani.bwpreset","name":"Articulation Map BBCSO Timpani","folder":"Note FX Layer"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Trumpets.bwpreset","name":"Articulation Map BBCSO Trumpets","folder":"Note FX Layer"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Tuba.bwpreset","name":"Articulation Map BBCSO Tuba","folder":"Note FX Layer"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Tubular Bells.bwpreset","name":"Articulation Map BBCSO Tubular Bells","folder":"Note FX Layer"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Xylophone.bwpreset","name":"Articulation Map BBCSO Xylophone","folder":"Note FX Layer"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map Template.bwpreset","name":"Articulation Map Template","folder":"Note FX Layer"}
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Basoon.bwpreset","name":"Articulation Map BBCSO Basoon","folder":"Note FX Layer"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Bass Trombones.bwpreset","name":"Articulation Map BBCSO Bass Trombones","folder":"Note FX Layer"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Celeste.bwpreset","name":"Articulation Map BBCSO Celeste","folder":"Note FX Layer"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Clarinet.bwpreset","name":"Articulation Map BBCSO Clarinet","folder":"Note FX Layer"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Crotales.bwpreset","name":"Articulation Map BBCSO Crotales","folder":"Note FX Layer"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Flute.bwpreset","name":"Articulation Map BBCSO Flute","folder":"Note FX Layer"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Glockenspiel.bwpreset","name":"Articulation Map BBCSO Glockenspiel","folder":"Note FX Layer"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Harp.bwpreset","name":"Articulation Map BBCSO Harp","folder":"Note FX Layer"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Horns.bwpreset","name":"Articulation Map BBCSO Horns","folder":"Note FX Layer"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Marimba.bwpreset","name":"Articulation Map BBCSO Marimba","folder":"Note FX Layer"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Oboe.bwpreset","name":"Articulation Map BBCSO Oboe","folder":"Note FX Layer"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Piccolo.bwpreset","name":"Articulation Map BBCSO Piccolo","folder":"Note FX Layer"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Strings.bwpreset","name":"Articulation Map BBCSO Strings","folder":"Note FX Layer"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Tenor Trombones.bwpreset","name":"Articulation Map BBCSO Tenor Trombones","folder":"Note FX Layer"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Timpani.bwpreset","name":"Articulation Map BBCSO Timpani","folder":"Note FX Layer"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Trumpets.bwpreset","name":"Articulation Map BBCSO Trumpets","folder":"Note FX Layer"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Tuba.bwpreset","name":"Articulation Map BBCSO Tuba","folder":"Note FX Layer"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Tubular Bells.bwpreset","name":"Articulation Map BBCSO Tubular Bells","folder":"Note FX Layer"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map BBCSO Xylophone.bwpreset","name":"Articulation Map BBCSO Xylophone","folder":"Note FX Layer"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Note FX Layer\\Articulation Map Template.bwpreset","name":"Articulation Map Template","folder":"Note FX Layer"}
     ],
     "presets": [
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Augmented WOODWINDS\\Gods Own Flute.bwpreset","name":"Gods Own Flute","folder":"Augmented WOODWINDS"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Chain\\Instrument Windy Pizzacato.bwpreset","name":"Instrument Windy Pizzacato","folder":"Chain"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Instrument Layer\\Goomba's Celeste.bwpreset","name":"Goomba's Celeste","folder":"Instrument Layer"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Instrument Layer\\LowThing.bwpreset","name":"LowThing","folder":"Instrument Layer"},
-      {"path":"C:\\Users\\you\\Documents\\Bitwig Studio\\Library\\Presets\\Kontakt 8\\Albion Elephant.bwpreset","name":"Albion Elephant","folder":"Kontakt 8"}
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Augmented WOODWINDS\\Gods Own Flute.bwpreset","name":"Gods Own Flute","folder":"Augmented WOODWINDS"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Chain\\Instrument Windy Pizzacato.bwpreset","name":"Instrument Windy Pizzacato","folder":"Chain"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Instrument Layer\\Goomba's Celeste.bwpreset","name":"Goomba's Celeste","folder":"Instrument Layer"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Instrument Layer\\LowThing.bwpreset","name":"LowThing","folder":"Instrument Layer"},
+      {"path":"C:\\Users\\jd838\\OneDrive\\Documents\\Bitwig Studio\\Library\\Presets\\Kontakt 8\\Albion Elephant.bwpreset","name":"Albion Elephant","folder":"Kontakt 8"}
     ]
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = data;

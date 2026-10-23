@@ -1,10 +1,10 @@
 // Feature module: layout. Loaded last. Arranges the header and the feature toolbar the other modules filled:
-//  * "⟳ Read arrangement" sits in the header as the primary action, with its read status.
+//  * "⟳ Read project" sits in the header as the primary action, with its read status.
 //  * The feature toolbar is sorted into clusters: Score · Write · Play · File · View · More (SV.addToolbar opts).
 //  * Header layout preference (scoreview.layout.header): 'compact' (default) — one app bar that never wraps, with
 //    File ▾ and View ▾ menus; Key, Quantize, Page / Single line, Zoom, Shortcuts, render time and the connection dot
 //    move to the status bar; the view checkboxes (Simplify rhythms, Follow, … Paper) move into View ▾; "Exact clip
-//    lengths" into the small ▾ next to Read arrangement — or 'classic': the old stacked rows (View ▾ then holds only
+//    lengths" into the small ▾ next to Read project — or 'classic': the old stacked rows (View ▾ then holds only
 //    the header choice and the View cluster). The same elements move (ids unchanged) and go back where they came from.
 (function () {
   'use strict';
@@ -80,7 +80,7 @@
     html[data-header="classic"] #svPaletteBtn kbd { display: none; }
   `);
 
-  // ------------------------------------------------------------------ Read arrangement → header
+  // ------------------------------------------------------------------ Read project → header
 
   function placeReadButton() {
     const btn = $('svarRead');
@@ -88,8 +88,8 @@
     const group = btn.closest('.group') || btn.parentElement;
     group.classList.add('svl-read');
     btn.classList.add('svl-primary');
-    btn.textContent = '⟳ Read arrangement';
-    btn.title = 'Read every clip in Bitwig into the score (select any clip in the Arranger first). ' +
+    btn.textContent = '⟳ Read project';
+    btn.title = 'Read every clip of the open Bitwig project into the score (click any clip in the Arranger first). ' +
       'Do this after drawing or recording clips so all staves show their notes.';
     if (!$('svlReadInfo')) { const s = document.createElement('span'); s.id = 'svlReadInfo'; group.appendChild(s); }
     const mode = $('modeSeg');
@@ -112,11 +112,14 @@
     if (busy) text = '';
     else if (base && base.source === 'crawl') {
       stale = SV.arrangement && SV.arrangement.staleReasons ? SV.arrangement.staleReasons().length > 0 : false;
-      text = `${stale ? '' : '✓ '}${base.parts.length} parts read · ${ago(Date.now() - (SV.state.baseMtime || Date.now()))}${stale ? ' · out of date' : ''}`;
+      const restored = SV.arrangement && SV.arrangement.mirrorInfo && SV.arrangement.mirrorInfo().restoredAt;
+      const what = base.fresh ? `new score · ${base.parts.length} staves` : `${base.parts.length} parts read`; // New: stored like a read
+      text = `${stale ? '' : '✓ '}${what} · ${ago(Date.now() - (SV.state.baseMtime || Date.now()))}` +
+        `${restored ? ' · restored' : ''}${stale ? ' · out of date' : ''}`;
       ok = !stale;
     }
     else if (base && base.fresh) { text = 'empty score — read once you have clips'; nudge = SV.state.mode === 'score'; }
-    else if (base) text = 'showing ' + (base.title || 'an export');
+    else if (base) text = 'showing ' + (base.title || 'a score file'); // a test fixture
     else { text = 'only the selected clip has notes — read to see every track'; nudge = SV.state.mode === 'score'; }
     info.textContent = text;
     info.classList.toggle('svl-ok', ok);
@@ -241,11 +244,10 @@
   // What the compact header moves: [selector, where]. A checkbox moves with its <label>; 'group:' moves the header
   // .group around the element.
   const MOVES = [
-    ['#simplify', 'view'], ['#follow', 'view'], ['#condense', 'view'], ['#hideKs', 'view'], ['#audition', 'view'],
-    ['#sviNames', 'view'], ['#sviTransposed', 'view'], ['#sviRanges', 'view'], ['#svaDyn', 'view'], ['#svpbMarks', 'view'],
+    ['#simplify', 'view'], ['#interpret', 'view'], ['#follow', 'view'], ['#condense', 'view'], ['#hideUnused', 'view'], ['#hideKs', 'view'], ['#audition', 'view'], ['#bitwigSel', 'view'], ['#keyPreset', 'view'],
+    ['#sviNames', 'view'], ['#sviTransposed', 'view'], ['#sviRanges', 'view'], ['#svaDyn', 'view'], ['#svpbMarks', 'view'], ['#svpbCue', 'view'],
     ['#svpGroup', 'view'],
-    ['#freshBtn', 'fileScore'], ['#openBtn', 'fileScore'],
-    ['#svarExact', 'read'],
+    ['#freshBtn', 'fileScore'],
     ['group:#keySel', 'status'], ['group:#layoutSeg', 'status'],
     ['#helpToggle', 'right'], ['#renderTime', 'right'], ['#dot', 'right'],
   ];
@@ -255,7 +257,7 @@
   function target(sel) {
     if (sel.startsWith('group:')) { const x = document.querySelector(sel.slice(6)); return x && x.closest('.group'); }
     const el = document.querySelector(sel);
-    if (el && el.tagName === 'INPUT' && el.type === 'checkbox') return el.closest('label') || el;
+    if (el && ((el.tagName === 'INPUT' && el.type === 'checkbox') || el.tagName === 'SELECT')) return el.closest('label') || el; // with its caption
     return el;
   }
   const markEmptyGroups = () => document.querySelectorAll('header > .group, #featureBar .svl-cluster > .group').forEach(g => {
@@ -271,7 +273,7 @@
       to.appendChild(el);
     });
     const read = $('svarRead');
-    if (read) read.after(readMore.wrap);
+    if (read && readMore.pop.children.length) read.after(readMore.wrap); // Read ▾ only when something lives in it
     placeRight(true);
     markEmptyGroups();
   }

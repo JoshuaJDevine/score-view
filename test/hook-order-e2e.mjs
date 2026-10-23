@@ -16,13 +16,14 @@ const EXPECTED = {
   // controller and orchestrate unshift their panel-closing Esc handlers, so an open panel closes before entry mode or
   // the selection sees the Esc; orchestrate's other keys stay in script order. dynamics comes before harmony: with live
   // notes selected H / Shift+H are hairpins (Sibelius), otherwise harmony colours.
-  keydown: ['controller', 'orchestrate', 'articulations', 'rhythm', 'dynamics', 'harmony', 'motifs', 'orchestrate', 'entry',
+  keydown: ['controller', 'orchestrate', 'articulations', 'articulations', 'rhythm', 'dynamics', 'harmony', 'motifs', 'orchestrate', 'entry',
     'mouse', 'mouse', 'passage', 'playback', 'print'].map(f),
-  noteClick: ['articulations', 'rhythm', 'entry', 'passage'].map(f),
+  noteClick: ['articulations', 'rhythm', 'entry', 'passage', 'playback'].map(f),
   paperClick: ['rhythm', 'entry', 'passage'].map(f),
   paperMouseDown: ['dynamics', 'mouse'].map(f),
-  liveData: ['sections', 'dynamics', 'dynamics', 'motifs', 'entry', 'passage', 'playback', 'arrangement'].map(f),
-  play: ['entry', 'playback', 'notation'].map(f),
+  liveData: ['articulations', 'sections', 'dynamics', 'dynamics', 'dynamics', 'motifs', 'entry', 'passage', 'playback', 'arrangement'].map(f),
+  liveSettled: ['dynamics'].map(f),
+  play: ['dynamics', 'entry', 'playback', 'notation'].map(f),
   visibleTracks: ['sections'].map(f),
 };
 

@@ -110,9 +110,10 @@ const near = (a, b, eps = 1e-3) => Math.abs(a - b) <= eps;
   assert.deepEqual(v1, v2, 'variation is seeded (same seed, same curve)');
   assert.notDeepEqual(v1, v3);
   const dev = Math.max(...v1.map(p => Math.abs(p.v - m.at(p.beat))));
-  assert.ok(dev > 0.001 && dev <= 0.03, 'variation is subtle: ' + dev.toFixed(4));
-  assert.ok(v1.some(p => p.beat === 28 || p.beat === 30), 'long holds get a gentle drift');
-  assert.ok(v1.length <= pts.length + 8);
+  // gentle: at amount 0.5 well under one dynamic step (0.13), so the music stays inside its dynamic
+  assert.ok(dev > 0.01 && dev <= 0.06, 'variation is gentle but audible: ' + dev.toFixed(4));
+  assert.ok([28, 29, 30, 31].every(b => v1.some(p => p.beat === b)), 'a held dynamic drifts every beat');
+  assert.ok(v1.length <= pts.length + 24);
   ok(`curve points: ${pts.length} points for p<f>…pp over 8 bars, thinned, seeded variation (max ${dev.toFixed(3)})`);
 }
 
@@ -169,9 +170,21 @@ const near = (a, b, eps = 1e-3) => Math.abs(a - b) <= eps;
   const entry = { marks: [{ id: 'm1', beat: 0, text: 'p' }, { id: 'm2', beat: 4, text: 'ff' }], hairpins: [] };
   const v = new Map(D.planVelocities(entry, notes).map(x => [x.id, x.vel]));
   const first = [0, 1, 2, 3].map(b => v.get('n' + b)), second = [4, 5, 6, 7].map(b => v.get('n' + b));
-  assert.equal(Math.round(first.reduce((s, x) => s + x) / 4), D.VELOCITY.p, 'p: average velocity 49');
-  assert.ok(first[2] > first[0], 'the accent survives');
+  assert.ok(first.every(x => x === D.VELOCITY.p), 'without humanize every note under p is exactly p');
   assert.ok(second.every(x => x === D.VELOCITY.ff));
+  // humanize: seeded, within ±H (+ the downbeat lift), deterministic (applying twice changes nothing)
+  const many = Array.from({ length: 64 }, (_, i) => ({ id: 'h' + i, start: i / 2, pitch: 60 + (i % 5), vel: 64 }));
+  const hum = { marks: [{ id: 'p', beat: 0, text: 'p' }], hairpins: [] };
+  const h1 = D.planVelocities(hum, many, { humanize: 4, seed: 9 });
+  const after = many.map(n => ({ ...n, vel: (h1.find(x => x.id === n.id) || n).vel }));
+  assert.deepEqual(D.planVelocities(hum, after, { humanize: 4, seed: 9 }), [], 'humanized velocities are stable');
+  const hv = after.map(n => n.vel);
+  assert.ok(Math.min(...hv) >= D.VELOCITY.p - 4 && Math.max(...hv) <= D.VELOCITY.p + 4 + 3, 'within ±4 (+ downbeat lift)');
+  assert.ok(new Set(hv).size >= 5, 'the notes differ');
+  const down = after.filter(n => n.start % 4 === 0).map(n => n.vel), off = after.filter(n => n.start % 1 !== 0).map(n => n.vel);
+  assert.ok(down.reduce((s, x) => s + x) / down.length > off.reduce((s, x) => s + x) / off.length, 'downbeats a little stronger');
+  // ids: only these notes (new notes follow the dynamic)
+  assert.deepEqual(D.planVelocities(entry, notes, { ids: new Set(['n5']) }).map(x => x.id), ['n5']);
   const only = D.planVelocities(entry, notes, { only: new Set(['m2']) });
   assert.deepEqual(only.map(x => x.id), ['n4', 'n5', 'n6', 'n7'], 'only the new mark’s notes');
   const fp = D.planVelocities({ marks: [{ id: 'x', beat: 0, text: 'fp' }], hairpins: [] }, notes.slice(0, 3).map(n => ({ ...n, vel: 90 })));
@@ -179,10 +192,21 @@ const near = (a, b, eps = 1e-3) => Math.abs(a - b) <= eps;
   const sfz = D.planVelocities({ marks: [{ id: 'x', beat: 2, text: 'sfz' }], hairpins: [] }, notes);
   assert.deepEqual(sfz, [{ id: 'n2', vel: 118 }]);
   const hp = { marks: [{ id: 'a', beat: 0, text: 'p' }, { id: 'b', beat: 8, text: 'f' }], hairpins: [{ id: 'h', start: 0, end: 8, form: 'cres' }] };
-  assert.deepEqual(D.planVelocities(hp, notes, { marks: false }), [], 'hairpins leave velocities alone by default');
-  const swell = new Map(D.planVelocities(hp, notes.map(n => ({ ...n, vel: 80 })), { marks: false, hairpins: true }).map(x => [x.id, x.vel]));
-  assert.ok(swell.get('n7') > swell.get('n1'), 'with the preference, velocities follow the hairpin');
-  ok('velocities: marks scale the notes they govern (fp, sfz), hairpins only by preference');
+  assert.deepEqual(D.planVelocities(hp, notes, { marks: false, hairpins: false }), [], 'hairpins off: velocities alone');
+  const swell = new Map(D.planVelocities(hp, notes.map(n => ({ ...n, vel: 80 })), { marks: false }).map(x => [x.id, x.vel]));
+  assert.ok(swell.get('n7') > swell.get('n4') && swell.get('n4') > swell.get('n1'), 'velocities follow the hairpin (default)');
+  ok('velocities: dynamics set the notes they govern (fp, sfz, hairpins), humanized and stable');
+}
+
+// ---- re-anchoring: dynamics follow their clip once its position is known
+{
+  const t = { marks: [{ id: 'a', beat: 8.5, text: 'p', co: 8.5, ck: '16|0|4', or: 0, clip: 8.5 }, { id: 'b', beat: 20, text: 'f', co: 16, ck: 'other', or: 2 }],
+    hairpins: [{ id: 'h', start: 9, end: 12, form: 'cres', co: 8.5, ck: '16|0|4', or: 0 }] };
+  assert.equal(D.reanchor(t, '16|0|4', 0), 2);
+  assert.deepEqual([t.marks.find(m => m.id === 'a').beat, t.hairpins[0].start, t.hairpins[0].end], [0, 0.5, 3.5]);
+  assert.equal(t.marks.find(m => m.id === 'b').beat, 20, 'another clip\'s dynamics stay');
+  assert.equal(D.reanchor(t, '16|0|4', 0), 0, 'nothing left to move');
+  ok('reanchor: a guessed clip position is corrected, other clips untouched');
 }
 
 // ---- engraving: ids reach the SVG

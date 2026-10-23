@@ -5,12 +5,24 @@
   const C = window.SV.core;
   const { $, SB, state, runHooks } = C;
 
+  // Elements matching sel in the engravings (.svc: the whole score, or one chunk per system) within pad px of the
+  // mouse's height: a chunked score measures only the systems near the mouse, not every note of the score.
+  function near(e, sel, pad) {
+    const chunks = document.querySelectorAll('#paper > .svc');
+    if (chunks.length < 2) return [...document.querySelectorAll('#paper ' + sel)];
+    const out = [];
+    C.geom.rects(chunks).forEach((b, i) => {
+      if (e.clientY >= b.top - pad && e.clientY <= b.bottom + pad) out.push(...chunks[i].querySelectorAll(sel));
+    });
+    return out;
+  }
+
   // Nearest rendered notehead group (g.note) within a small radius of the mouse, or null.
   function noteAt(e) {
     const g = e.target.closest && e.target.closest('#paper g.note');
     if (g) return g;
     let best = null, bestD = 14 * 14;
-    const els = document.querySelectorAll('#paper g.note');
+    const els = near(e, 'g.note', 14);
     C.geom.rects(els).forEach((b, i) => {
       const dx = Math.max(b.left - e.clientX, 0, e.clientX - b.right), dy = Math.max(b.top - e.clientY, 0, e.clientY - b.bottom);
       const d = dx * dx + dy * dy;
@@ -19,9 +31,16 @@
     return best;
   }
 
+  // The render whose SVG the mouse is on: SV.state.render, or while a big engraving is still running in the workers
+  // (state.render.drawn false), the one the paper still shows.
+  function paperRender() {
+    const r = state.render; // flushes a pending requestRender
+    return r && !r.drawn && C.shownRender() ? C.shownRender() : r;
+  }
+
   // Click: nearest notehead within a small radius (features/mouse.js may take the press first, for drags).
   function clickPaper(e) {
-    const r = state.render;
+    const r = paperRender();
     if (!r) return;
     const g = noteAt(e);
     if (!g) {
@@ -33,7 +52,7 @@
     if (!t) return;
     if (runHooks('noteClick', t, e)) { e.preventDefault(); return; }
     if (C.isLive(t.srcId)) C.selectNote(t.srcId, e.shiftKey);
-    else C.flash('Read-only (from the export). Select that clip in Bitwig to edit it here.');
+    else C.flash('This note is in another clip. Click that clip in Bitwig to edit it here.');
     $('main').focus();
     e.preventDefault();
   }
@@ -47,11 +66,11 @@
   // (staff lines give the vertical scale; measure bounds give an approximate beat). Null when off-staff.
   // pitch is the natural (white-key) pitch under the mouse; apply the key signature yourself if needed.
   function hitTest(e) {
-    const r = state.render;
+    const r = paperRender();
     if (!r) return null;
     const geom = C.geom;
     let best = null;
-    document.querySelectorAll('#paper g.measure').forEach(mEl => {
+    near(e, 'g.measure', 120).forEach(mEl => {
       const mb = geom.rect(mEl);
       if (e.clientX < mb.left || e.clientX > mb.right) return;
       mEl.querySelectorAll(':scope > g.staff').forEach(stEl => {

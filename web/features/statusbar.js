@@ -91,6 +91,7 @@
       border: 1px solid transparent; border-radius: var(--sv-radius-sm); font: var(--sv-fs-control) var(--sv-font);
       padding: 1px var(--sv-space-3); cursor: pointer; }
     #svStatusBar .svs-btn:hover, #svStatusBar #helpToggle:hover { color: var(--sv-text); border-color: var(--sv-border); }
+    #svStatusBar .svs-btn.on { color: var(--sv-accent, #ff9c3a); border-color: var(--sv-accent, #ff9c3a); }
     #svStatusBar .svs-btn:focus-visible { outline: none; box-shadow: var(--sv-focus); }
   `);
 

@@ -2,6 +2,7 @@
 //  * Rehearsal marks from Bitwig's cue markers (live) or the DAWproject's arrangement markers.
 //  * Transport from the score: click a bar number (or Alt+click in a bar) = play from that bar,
 //    Space = play/stop, L = loop the selection's bars (or the last clicked bar), Shift+L = loop off.
+//  * Click a live note while stopped = move Bitwig's playhead there ("Click sets playhead", on by default).
 //  * Solo/mute buttons on staff-label hover, and a compact transport strip in the toolbar.
 // Beats sent to Bitwig are arranger beats. In Score mode the rendered bars are arranger bars
 // (measure ids m<N> carry the absolute bar number); in Clip mode the clip's arranger position is
@@ -17,6 +18,7 @@
   };
 
   let showMarks = store.get('marks', true);
+  let clickCue = store.get('clickCue', true);
   let play = { playing: false, pos: 0, tempo: 120, loop: null };
   let lastBar = null;               // { start, end } render beats of the last clicked bar
   const learnedOffsets = new Map(); // track name -> arranger beat of the clip start (from the playhead)
@@ -84,6 +86,27 @@
     SV.flash('Play from bar ' + n);
     updateStrip();
   }
+
+  // Arranger beat of a live note's start (content beat x / stepsPerBeat), or null when the clip's place is unknown.
+  function noteArrangerBeat(id) {
+    const d = S.liveData;
+    if (!d || !d.exists || S.source !== 'arranger') return null;
+    const beat = SV.parseId(id).x / (d.stepsPerBeat || 24);
+    if (S.mode === 'score' && S.align && S.align.track === d.track) return SV.contentOrigin() + beat;
+    const o = SV.dynamics && SV.dynamics.liveOrigin ? SV.dynamics.liveOrigin() : null; // placement, last read, play start
+    if (o) return o.origin + beat;
+    return learnedOffsets.has(d.track) ? learnedOffsets.get(d.track) + beat : null;
+  }
+
+  // A plain click on a live note while stopped moves Bitwig's playhead (and with it the play start marker) to the note.
+  SV.hooks.noteClick.push((t, e) => {
+    if (!clickCue || play.playing || S.playing || e.button !== 0 || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return false;
+    if (SV.entry && SV.entry.state && SV.entry.state.on) return false;
+    if (!SV.isLive(t.srcId)) return false;
+    const arr = noteArrangerBeat(t.srcId);
+    if (arr != null && arr >= 0) { SV.send(['position ' + fmt(arr)]); play.pos = arr; updateStrip(); }
+    return false; // the built-in click still selects the note
+  });
 
   function unknownClipPosition() {
     SV.flash(S.source === 'launcher'
@@ -180,31 +203,63 @@
     return d && d.tracks ? d.tracks.find(t => t.name === name && t.index != null) : null;
   };
 
+  // The zones sit inside each engraving (.svc: the whole score, or one system of a big one), placed relative to it: an
+  // engraving kept from an earlier render keeps its zones (while the tracks and pins are the same), so a re-render
+  // measures only the new ones. Measures every staff first, then adds all the zones: appending one between two
+  // measurements would force a layout of the whole score per staff (hundreds on a full score).
   function buildSoloMute() {
     const paper = document.getElementById('paper'), r = S.render;
     if (!paper || !r) return;
-    const pr = paper.getBoundingClientRect();
-    document.querySelectorAll('#paper g.system').forEach(sys => {
-      const first = sys.querySelector('g.measure');
-      if (!first) return;
-      const seen = new Set();
-      first.querySelectorAll(':scope > g.staff').forEach(st => {
-        const n = parseInt((st.id.match(/s(\d+)$/) || [])[1], 10);
-        const staff = r.staves.find(s => s.n === n);
-        if (!staff || seen.has(staff.part)) return;
-        seen.add(staff.part);
-        const track = trackFor(staff.part);
-        if (!track) return;
-        const lines = [...st.querySelectorAll(':scope > path')].map(p => p.getBoundingClientRect()).filter(b => b.width > 20);
-        if (lines.length < 5) return;
-        const left = Math.min(...lines.map(b => b.left)) - pr.left, top = lines[0].top - pr.top, h = lines[4].top - lines[0].top;
-        const zone = document.createElement('div');
-        zone.className = 'svpb-sm';
-        zone.dataset.track = track.index;
-        zone.style.cssText = `left:0;width:${Math.max(40, left - 4)}px;top:${top - 4}px;height:${h + 8}px`;
-        zone.innerHTML = `<button data-op="solo" title="Solo ${esc(track.name)}">S</button><button data-op="mute" title="Mute ${esc(track.name)}">M</button>`;
-        paper.appendChild(zone);
+    const d = S.liveData;
+    const sig = JSON.stringify([S.mode, [...(S.pinned || [])], ((d && d.tracks) || []).map(t => t.index + ':' + t.name)]);
+    // A chunk the browser skips (off-screen) gets its zones when it comes into view: measuring it now forces its layout.
+    const C = SV.core || {};
+    const todo = [...paper.querySelectorAll(':scope > .svc:not(.svc-wait)')].filter(c => {
+      if (c.dataset.svpb === sig) return false;
+      if (!C.skipped || !C.skipped(c)) return true;
+      if (!c.__svpbWait) { c.__svpbWait = true; C.whenShown(c, () => { c.__svpbWait = false; buildSoloMute(); }); }
+      return false;
+    });
+    const places = []; // { box, track, left, top, h }
+    todo.forEach(box => {
+      const br = box.getBoundingClientRect();
+      box.querySelectorAll('g.system').forEach(sys => {
+        const first = sys.querySelector('g.measure');
+        if (!first) return;
+        const seen = new Set();
+        first.querySelectorAll(':scope > g.staff').forEach(st => {
+          const n = parseInt((st.id.match(/s(\d+)$/) || [])[1], 10);
+          const staff = r.staves.find(s => s.n === n);
+          if (!staff || seen.has(staff.part)) return;
+          seen.add(staff.part);
+          const track = trackFor(staff.part);
+          if (!track) return;
+          const lines = [...st.querySelectorAll(':scope > path')].map(p => p.getBoundingClientRect()).filter(b => b.width > 20);
+          if (lines.length < 5) return;
+          places.push({ box, track, left: Math.min(...lines.map(b => b.left)) - br.left, top: lines[0].top - br.top, h: lines[4].top - lines[0].top });
+        });
       });
+    });
+    todo.forEach(box => {
+      box.querySelectorAll(':scope > .svpb-sm, :scope > .svpb-pin').forEach(el => el.remove());
+      box.dataset.svpb = sig;
+    });
+    places.forEach(({ box, track, left, top, h }) => {
+      const zone = document.createElement('div');
+      zone.className = 'svpb-sm';
+      zone.dataset.track = track.index;
+      zone.style.cssText = `left:0;width:${Math.max(40, left - 4)}px;top:${top - 4}px;height:${h + 8}px`;
+      zone.innerHTML = `<button data-op="solo" title="Solo ${esc(track.name)}">S</button><button data-op="mute" title="Mute ${esc(track.name)}">M</button>`;
+      box.appendChild(zone);
+      // Score mode: a pinned track gets a pin beside its name (like ✎ for the track being edited).
+      if (S.mode === 'score' && S.pinned && S.pinned.has(track.name)) {
+        const pin = document.createElement('div');
+        pin.className = 'svpb-pin';
+        pin.title = `${track.name} is pinned (P or Unpin in the header to remove)`;
+        pin.textContent = '📌';
+        pin.style.cssText = `left:${Math.max(0, left - 18)}px;top:${top - 12}px`;
+        box.appendChild(pin);
+      }
     });
     refreshSoloMute();
   }
@@ -251,23 +306,30 @@
   }, true);
 
   // Rehearsal marks: boxed, and nudged right of the bar number they would otherwise sit on.
+  // All marks are measured before any is changed (a change between two measurements forces a layout each time);
+  // getBBox is in the mark's own coordinates, so the nudge does not change the box drawn around it.
   function styleRehearsalMarks() {
-    document.querySelectorAll('#paper g.reh').forEach(reh => {
+    // A mark already boxed (an engraving kept from an earlier render: unchanged chunks keep their SVG) is left alone.
+    const marks = [...document.querySelectorAll('#paper g.reh:not(.svpb-boxed)')].map(reh => {
       const num = reh.closest('g.measure') && reh.closest('g.measure').querySelector(':scope > g.mNum');
       const ctm = reh.getScreenCTM();
+      let dx = 0;
       if (num && ctm) {
         const a = reh.getBoundingClientRect(), b = num.getBoundingClientRect();
-        if (a.left < b.right + 3 && a.right > b.left && a.top < b.bottom && a.bottom > b.top) {
-          reh.setAttribute('transform', `translate(${(b.right + 6 - a.left) / ctm.a},0)`);
-        }
+        if (a.left < b.right + 3 && a.right > b.left && a.top < b.bottom && a.bottom > b.top) dx = (b.right + 6 - a.left) / ctm.a;
       }
-      const bb = reh.getBBox(), pad = bb.height * 0.18;
+      return { reh, dx, bb: reh.getBBox() };
+    });
+    marks.forEach(({ reh, dx, bb }) => {
+      if (dx) reh.setAttribute('transform', `translate(${dx},0)`);
+      const pad = bb.height * 0.18;
       const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
       rect.setAttribute('x', bb.x - pad); rect.setAttribute('y', bb.y - pad * 0.6);
       rect.setAttribute('width', bb.width + 2 * pad); rect.setAttribute('height', bb.height + pad * 1.2);
       rect.setAttribute('fill', 'none'); rect.setAttribute('stroke', 'currentColor');
       rect.setAttribute('stroke-width', Math.max(1, bb.height * 0.06));
       reh.insertBefore(rect, reh.firstChild);
+      reh.classList.add('svpb-boxed');
     });
   }
 
@@ -288,7 +350,7 @@
     const d = S.liveData;
     // While an arranger clip plays, its start in the arrangement is playhead - step.
     if (p.playing && p.step >= 0 && d && d.exists && S.source === 'arranger') {
-      const off = Math.round((p.pos - p.step / d.stepsPerBeat) * 8) / 8;
+      const off = SV.core.playheadOffset(p.pos - p.step / d.stepsPerBeat); // snapped: pos and step jitter ~0.1 beat
       const prev = learnedOffsets.get(d.track);
       if (off >= 0 && (prev == null || Math.abs(prev - off) > 0.01)) {
         learnedOffsets.set(d.track, off);
@@ -307,6 +369,7 @@
     .svpb-sm { position: absolute; display: flex; align-items: center; justify-content: flex-start; gap: 2px; padding-left: 3px;
                opacity: 0; transition: opacity .1s; z-index: 2; pointer-events: none; }
     .svpb-sm button { pointer-events: auto; }
+    .svpb-pin { position: absolute; z-index: 2; font-size: 12px; line-height: 1; pointer-events: none; opacity: .85; }
     .svpb-sm.hot, .svpb-sm.active { opacity: 1; }
     .svpb-sm.active:not(.hot) button:not(.on) { visibility: hidden; }
     .svpb-sm button { font: 600 10px/1 system-ui, sans-serif; width: 17px; height: 16px; padding: 0; cursor: pointer;
@@ -327,12 +390,14 @@
   strip.innerHTML = '<button class="btn" id="svpbPlay" title="Play / stop (Space)">▶</button>' +
     '<span id="svpbPos">bar 1 beat 1</span><span id="svpbTempo"></span>' +
     '<button class="btn" id="svpbLoop" title="L: loop the selected bars (or the last clicked bar) · Shift+L: loop off">⟳ Loop</button>' +
-    `<label title="Rehearsal marks from Bitwig's cue markers / the DAWproject"><input type="checkbox" id="svpbMarks" ${showMarks ? 'checked' : ''}> Marks</label>`;
+    `<label title="Rehearsal marks from Bitwig's cue markers / the DAWproject"><input type="checkbox" id="svpbMarks" ${showMarks ? 'checked' : ''}> Marks</label>` +
+    `<label title="Clicking a note while stopped moves Bitwig's playhead to it"><input type="checkbox" id="svpbCue" ${clickCue ? 'checked' : ''}> Click sets playhead</label>`;
   SV.addToolbar(strip, { cluster: 'play', order: 130 });
   const $ = id => document.getElementById(id);
   $('svpbPlay').addEventListener('click', e => { togglePlay(); e.currentTarget.blur(); });
   $('svpbLoop').addEventListener('click', e => { if (play.loop && play.loop.on) loopOff(); else loopSelection(); e.currentTarget.blur(); });
   $('svpbMarks').addEventListener('change', e => { showMarks = e.target.checked; store.set('marks', showMarks); SV.render(); });
+  $('svpbCue').addEventListener('change', e => { clickCue = e.target.checked; store.set('clickCue', clickCue); e.target.blur(); });
 
   function updateStrip() {
     const ts = timeSig(), mb = ts.num * 4 / ts.den, unit = 4 / ts.den;
@@ -356,5 +421,5 @@
   SV.addHelp('Click a bar number (or <kbd>Alt</kbd>+click a bar) to play from there · <kbd>Space</kbd> play/stop · ' +
     '<kbd>L</kbd> loop selected bars · <kbd>Shift</kbd>+<kbd>L</kbd> loop off · hover a staff name for Solo/Mute');
 
-  SV.playback = { playFromBar, togglePlay, loopSelection, loopOff, markers, clipOffset };
+  SV.playback = { playFromBar, togglePlay, loopSelection, loopOff, markers, clipOffset, noteArrangerBeat };
 })();

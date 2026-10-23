@@ -25,7 +25,7 @@ loads last and sorts the toolbar the others filled.
 | 12b | [passage](passage.md) | Sibelius-style passage selection; copy / paste between staves into Bitwig |
 | 13 | [playback](playback.md) | rehearsal marks, transport from the score, solo / mute |
 | 14 | [musicxml](musicxml.md) | MusicXML 4.0 export for Dorico |
-| 15 | [arrangement](arrangement.md) | live arrangement read into Score mode |
+| 15 | [arrangement](arrangement.md) | live arrangement read into Score mode, kept current as a stored mirror, listened to while playing (helpers: `arrangement-mirror`, `arrangement-listen`) |
 | 16 | [import](import.md) | MusicXML / MIDI import into the live clip |
 | 17 | [print](print.md) | print view and PDF |
 | 18 | [theme](theme.md) | paper colour (light / dark / Bitwig) |

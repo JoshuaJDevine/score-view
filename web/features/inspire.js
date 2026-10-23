@@ -306,7 +306,7 @@
 
   /**
    * Chords to write a melody over: the harmony of the other staves (Score mode); in Clip mode the other staves of the
-   * last ⟳ Read arrangement (placed by the crawled clip of the selected one); else the last Inspire pad.
+   * last ⟳ Read project (placed by the crawled clip of the selected one); else the last Inspire pad.
    */
   function chordSource(g) {
     // score: {timeSig, parts, ...} in arranger beats; origin: the arranger beat of the clip's content step 0.
@@ -345,7 +345,7 @@
   }
 
   /**
-   * Clip mode with a recent ⟳ Read arrangement: the other tracks' notes under the selected clip, in arranger beats ->
+   * Clip mode with a recent ⟳ Read project: the other tracks' notes under the selected clip, in arranger beats ->
    * { score, origin } | null. origin = the arranger beat of the clip's content step 0 (crawled clip start - play start).
    */
   function crawlSource(g) {
@@ -396,7 +396,7 @@
     const g = geometry();
     if (!g) return report('Select a clip in Bitwig first', true);
     const src = chordSource(g);
-    if (!src) return report('No chords to write over. ⟳ Read arrangement (the other tracks give the chords), or write a pad with Underscore string chords first.', true);
+    if (!src) return report('No chords to write over. ⟳ Read project (the other tracks give the chords), or write a pad with Underscore string chords first.', true);
     const r = barsFromDialog(g);
     if (!r) return null;
     seed = again ? seed + 1 : seed;
@@ -436,7 +436,7 @@
     return onsets.reduce((a, o) => a + notes.filter(n => n.start * 96 <= o + 0.5 && (n.start + n.dur) * 96 > o + 0.5).length, 0) / onsets.length;
   }
   function continueContext() {
-    if (!crawled()) return { error: 'Switch to Score mode and ⟳ Read arrangement first: Continue writes into both tracks through the arrangement.' };
+    if (!crawled()) return { error: 'Switch to Score mode and ⟳ Read project first: Continue writes into both tracks through the arrangement.' };
     const staves = S.base.parts.map(p => p.name).filter(n => staffNotes(n).length);
     if (!staves.length) return { error: 'No notes in the arrangement yet' };
     const pad = loadPad();
@@ -570,7 +570,7 @@
     const qa = ctx.error ? 0 : Math.round(ctx.qEnd / ctx.mb);
     const source = ctx.error ? esc(ctx.error)
       : `Question: bars ${Math.round(ctx.qStart / ctx.mb) + 1}–${qa}${ends ? ', ending on ' + esc(ends) : ''}. The answer starts at bar ${qa + 1}: `
-        + 'the clips must reach that far (lengthen them in Bitwig, then Read arrangement).';
+        + 'the clips must reach that far (lengthen them in Bitwig, then Read project).';
     panel.innerHTML = '<div class="ins-h">Continue the phrase</div>'
       + `<label class="ins-row">Mood <select id="insMood">${LIB.MOODS.map(m => opt(m.id, m.name, m.id === prefs.contMood)).join('')}</select></label>`
       + `<label class="ins-row">Answer <select id="insStyle">${opt('parallel', 'Parallel: restate the opening, then cadence', prefs.contStyle !== 'contrasting')}`
@@ -608,7 +608,7 @@
       + `<label class="ins-row">Bars <input type="number" id="insBars" min="1" max="256" value="${bars}"></label>`
       + `<label class="ins-row">Start at bar <input type="number" id="insStart" min="1" value="${start}"></label>`
       + `<label class="ins-row">Existing notes <select id="insExisting"><option value="replace" ${prefs.existing === 'replace' ? 'selected' : ''}>Replace them</option><option value="keep" ${prefs.existing === 'keep' ? 'selected' : ''}>Keep them</option></select></label>`
-      + `<div class="ins-blurb" id="insSource">${src ? 'Chords: ' + esc(src.label) : 'No chords found yet — ⟳ Read arrangement (the other tracks give the chords), or write a pad first.'}</div>`
+      + `<div class="ins-blurb" id="insSource">${src ? 'Chords: ' + esc(src.label) : 'No chords found yet — ⟳ Read project (the other tracks give the chords), or write a pad first.'}</div>`
       + '<div class="ins-actions"><button class="btn" id="insAgain" disabled title="Replace the last melody with another one in the same mood">Again</button>'
       + '<button class="btn" id="insWrite">Write</button><button class="btn" id="insClose">Close</button></div>'
       + '<div class="ins-status" id="insStatus"></div>';
